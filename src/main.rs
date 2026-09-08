@@ -725,6 +725,161 @@ const TOOLS: &[ToolSpec] = &[
         "settings"
     ),
     list!(
+        "unifi_get_autobackup_settings",
+        "Auto-backup Settings",
+        "system",
+        "get/setting",
+        "settings"
+    ),
+    list!(
+        "unifi_get_gateway_settings",
+        "Gateway Settings",
+        "system",
+        "get/setting",
+        "settings"
+    ),
+    list!(
+        "unifi_get_client_stats",
+        "Client Statistics",
+        "statistics",
+        "stat/sta",
+        "statistics"
+    ),
+    list!(
+        "unifi_get_client_sessions",
+        "Client Sessions",
+        "statistics",
+        "stat/session",
+        "sessions"
+    ),
+    list!(
+        "unifi_get_client_dpi_traffic",
+        "Client DPI Traffic",
+        "statistics",
+        "stat/sitedpi",
+        "traffic"
+    ),
+    list!(
+        "unifi_get_client_wifi_details",
+        "Client Wi-Fi Details",
+        "wireless",
+        "stat/sta",
+        "clients"
+    ),
+    list!(
+        "unifi_get_device_radio",
+        "Device Radio",
+        "wireless",
+        "stat/device",
+        "radios"
+    ),
+    list!(
+        "unifi_get_event_types",
+        "Event Types",
+        "events",
+        "stat/event",
+        "event_types"
+    ),
+    list!(
+        "unifi_get_ips_events",
+        "IPS Events",
+        "events",
+        "stat/ips/event",
+        "ips_events"
+    ),
+    list!(
+        "unifi_get_lldp_neighbors",
+        "LLDP Neighbours",
+        "switch",
+        "stat/device",
+        "neighbors"
+    ),
+    list!(
+        "unifi_get_pdu_outlets",
+        "PDU Outlets",
+        "switch",
+        "stat/device",
+        "outlets"
+    ),
+    list!(
+        "unifi_get_port_stats",
+        "Port Statistics",
+        "switch",
+        "stat/device",
+        "ports"
+    ),
+    list!(
+        "unifi_get_rf_scan_results",
+        "RF Scan Results",
+        "wireless",
+        "stat/device",
+        "rf_scan"
+    ),
+    list!(
+        "unifi_get_speedtest_status",
+        "Speed Test Status",
+        "statistics",
+        "stat/speedtest",
+        "status"
+    ),
+    list!(
+        "unifi_get_support_bundle",
+        "Support Bundle",
+        "system",
+        "stat/sysinfo",
+        "support_bundle"
+    ),
+    list!(
+        "unifi_get_switch_capabilities",
+        "Switch Capabilities",
+        "switch",
+        "stat/device",
+        "capabilities"
+    ),
+    list!(
+        "unifi_get_switch_ports",
+        "Switch Ports",
+        "switch",
+        "stat/device",
+        "ports"
+    ),
+    list!(
+        "unifi_get_traffic_flow_statistics",
+        "Traffic Flow Statistics",
+        "statistics",
+        "stat/flow",
+        "statistics"
+    ),
+    list!(
+        "unifi_get_traffic_flows",
+        "Traffic Flows",
+        "statistics",
+        "stat/flow",
+        "flows"
+    ),
+    list!(
+        "unifi_list_available_channels",
+        "Available Channels",
+        "wireless",
+        "get/setting",
+        "channels"
+    ),
+    list!(
+        "unifi_list_oon_policies",
+        "OON Policies",
+        "security",
+        "rest/oon",
+        "policies"
+    ),
+    detail!(
+        "unifi_get_oon_policy_details",
+        "OON Policy Details",
+        "security",
+        "rest/oon",
+        "policy_id",
+        CONFIG_IDS
+    ),
+    list!(
         "unifi_get_system_info",
         "System Information",
         "system",
@@ -976,6 +1131,12 @@ const TOOLS: &[ToolSpec] = &[
         "firewall",
         "firewall/policies/ordering"
     ),
+    integration_query!(
+        "unifi_get_firewall_policy_ordering",
+        "Firewall Policy Ordering",
+        "firewall",
+        "firewall/policies/ordering"
+    ),
     v2_list!(
         "unifi_list_api_vouchers",
         "Official Hotspot Vouchers",
@@ -1183,6 +1344,15 @@ const TOOLS: &[ToolSpec] = &[
     ),
     integration_write!(
         "unifi_reorder_api_firewall_policies",
+        "Reorder Firewall Policies",
+        "firewall",
+        IntegrationMethod::Put,
+        "firewall/policies/ordering",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_reorder_firewall_policies",
         "Reorder Firewall Policies",
         "firewall",
         IntegrationMethod::Put,
