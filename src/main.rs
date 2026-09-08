@@ -1,15 +1,17 @@
 use anyhow::{Context, Result, bail};
-use reqwest::{Client, StatusCode, Url};
+use reqwest::{Client, Method, StatusCode, Url};
 use rmcp::{
-    ErrorData as McpError, ServerHandler, ServiceExt,
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, ContentBlock},
-    schemars, tool, tool_handler, tool_router,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, JsonObject, ListToolsResult,
+        PaginatedRequestParams, ResultType, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+    },
+    service::RequestContext,
     transport::stdio,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::{env, fs};
+use serde_json::{Map, Value, json};
+use std::{borrow::Cow, env, fs, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
 
 const DEFAULT_BASE_URL: &str = "https://your-unifi-console.example";
 const DEFAULT_SITE: &str = "default";
@@ -17,13 +19,50 @@ const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
 const REDACTED: &str = "***REDACTED***";
 
-const ALLOWED_NETWORK_ENDPOINTS: &[&str] = &[
-    "stat/sta",
-    "stat/alluser",
-    "stat/rogueap",
-    "list/wlanconf",
-    "stat/device",
-];
+macro_rules! spec {
+    ($name:expr, $title:expr, $category:expr, $description:expr, $kind:expr) => {
+        ToolSpec {
+            name: $name,
+            title: $title,
+            category: $category,
+            description: $description,
+            kind: $kind,
+        }
+    };
+}
+macro_rules! list {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr, $key:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!("Read ", $title, " from the configured UniFi Network site."),
+            ToolKind::List {
+                endpoint: $endpoint,
+                output_key: $key
+            }
+        )
+    };
+}
+macro_rules! detail {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr, $arg:expr, $fields:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!(
+                "Return ",
+                $title,
+                " from the configured UniFi Network site."
+            ),
+            ToolKind::Detail {
+                endpoint: $endpoint,
+                id_arg: $arg,
+                id_fields: $fields
+            }
+        )
+    };
+}
 
 #[derive(Clone)]
 struct UnifiMcp {
@@ -35,387 +74,699 @@ struct UnifiClient {
     client: Client,
     base_url: Url,
     site: String,
-    api_key: String,
+    api_key: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    authenticated: Arc<Mutex<bool>>,
     redact_sensitive_fields: bool,
 }
 
 struct UnifiConfig {
     base_url: Url,
     site: String,
-    api_key: String,
+    api_key: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
     insecure_tls: bool,
     redact_sensitive_fields: bool,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ToolIndexArgs {
-    /// Filter tools by category.
-    category: Option<String>,
-    /// Case-insensitive search over tool name, category, and description.
-    search: Option<String>,
+#[derive(Clone, Copy)]
+enum ToolKind {
+    Index,
+    Execute,
+    Batch,
+    Dashboard,
+    List {
+        endpoint: &'static str,
+        output_key: &'static str,
+    },
+    Detail {
+        endpoint: &'static str,
+        id_arg: &'static str,
+        id_fields: &'static [&'static str],
+    },
+    LookupIp,
+    Raw,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ListDevicesArgs {
-    /// Maximum number of devices to return.
-    limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ListClientsArgs {
-    /// Only return currently connected clients.
-    online_only: Option<bool>,
-    /// Case-insensitive match against name, hostname, IP, MAC, or vendor fields.
-    query: Option<String>,
-    /// Maximum number of clients to return.
-    limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct RawNetworkEndpointArgs {
-    /// UniFi Network API endpoint. Must be one of the server allowlist.
-    endpoint: String,
-    /// Request limit sent to UniFi.
-    limit: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct ToolCatalogEntry {
+#[derive(Clone, Copy)]
+struct ToolSpec {
     name: &'static str,
+    title: &'static str,
     category: &'static str,
     description: &'static str,
-    read_only: bool,
+    kind: ToolKind,
 }
 
-const TOOL_CATALOG: &[ToolCatalogEntry] = &[
-    ToolCatalogEntry {
-        name: "unifi_tool_index",
-        category: "meta",
-        description: "List the UniFi tools exposed by this Rust MCP server.",
-        read_only: true,
-    },
-    ToolCatalogEntry {
-        name: "unifi_network_status",
-        category: "system",
-        description: "Return a compact UniFi Network status summary.",
-        read_only: true,
-    },
-    ToolCatalogEntry {
-        name: "unifi_list_devices",
-        category: "devices",
-        description: "List UniFi Network devices for the configured site.",
-        read_only: true,
-    },
-    ToolCatalogEntry {
-        name: "unifi_list_clients",
-        category: "clients",
-        description: "List UniFi Network clients for the configured site.",
-        read_only: true,
-    },
-    ToolCatalogEntry {
-        name: "unifi_list_wlans",
-        category: "wireless",
-        description: "List configured UniFi Wi-Fi networks.",
-        read_only: true,
-    },
-    ToolCatalogEntry {
-        name: "unifi_list_rogue_aps",
-        category: "devices",
-        description: "List rogue access points detected by UniFi Network.",
-        read_only: true,
-    },
-    ToolCatalogEntry {
-        name: "unifi_list_talk_sites",
-        category: "talk",
-        description: "List UniFi Talk sites visible to the configured API key.",
-        read_only: true,
-    },
-    ToolCatalogEntry {
-        name: "unifi_raw_network_endpoint",
-        category: "raw",
-        description: "Call a read-only allowlisted UniFi Network API endpoint.",
-        read_only: true,
-    },
+const DEVICE_IDS: &[&str] = &["_id", "id", "mac"];
+const CLIENT_IDS: &[&str] = &["_id", "id", "mac"];
+const CONFIG_IDS: &[&str] = &["_id", "id"];
+
+const TOOLS: &[ToolSpec] = &[
+    spec!(
+        "unifi_tool_index",
+        "Tool Index",
+        "meta",
+        "Search and filter the UniFi Network tool catalogue.",
+        ToolKind::Index
+    ),
+    spec!(
+        "unifi_execute",
+        "Execute Tool",
+        "meta",
+        "Execute a discovered UniFi Network tool by name.",
+        ToolKind::Execute
+    ),
+    spec!(
+        "unifi_batch",
+        "Batch Tools",
+        "meta",
+        "Execute up to 20 read-only UniFi Network tool calls in sequence.",
+        ToolKind::Batch
+    ),
+    spec!(
+        "unifi_get_dashboard",
+        "Dashboard",
+        "system",
+        "Return a compact Network dashboard with health, devices, clients, WLANs, alarms, and events.",
+        ToolKind::Dashboard
+    ),
+    list!(
+        "unifi_get_network_health",
+        "Network Health",
+        "system",
+        "stat/health",
+        "health"
+    ),
+    list!(
+        "unifi_list_devices",
+        "List Devices",
+        "devices",
+        "stat/device",
+        "devices"
+    ),
+    detail!(
+        "unifi_get_device_details",
+        "Device Details",
+        "devices",
+        "stat/device",
+        "device_id",
+        DEVICE_IDS
+    ),
+    list!(
+        "unifi_get_device_stats",
+        "Device Statistics",
+        "devices",
+        "stat/device",
+        "devices"
+    ),
+    list!(
+        "unifi_list_clients",
+        "List Clients",
+        "clients",
+        "stat/sta",
+        "clients"
+    ),
+    detail!(
+        "unifi_get_client_details",
+        "Client Details",
+        "clients",
+        "stat/alluser",
+        "client_id",
+        CLIENT_IDS
+    ),
+    spec!(
+        "unifi_lookup_by_ip",
+        "Lookup by IP",
+        "clients",
+        "Find a client or UniFi device by IP address.",
+        ToolKind::LookupIp
+    ),
+    list!(
+        "unifi_list_blocked_clients",
+        "Blocked Clients",
+        "clients",
+        "stat/alluser",
+        "blocked_clients"
+    ),
+    list!(
+        "unifi_list_wlans",
+        "List WLANs",
+        "wireless",
+        "list/wlanconf",
+        "wlans"
+    ),
+    detail!(
+        "unifi_get_wlan_details",
+        "WLAN Details",
+        "wireless",
+        "list/wlanconf",
+        "wlan_id",
+        CONFIG_IDS
+    ),
+    list!(
+        "unifi_list_networks",
+        "List Networks",
+        "networks",
+        "rest/networkconf",
+        "networks"
+    ),
+    detail!(
+        "unifi_get_network_details",
+        "Network Details",
+        "networks",
+        "rest/networkconf",
+        "network_id",
+        CONFIG_IDS
+    ),
+    list!(
+        "unifi_list_events",
+        "List Events",
+        "events",
+        "stat/event",
+        "events"
+    ),
+    list!(
+        "unifi_recent_events",
+        "Recent Events",
+        "events",
+        "stat/event",
+        "events"
+    ),
+    list!(
+        "unifi_list_alarms",
+        "List Alarms",
+        "events",
+        "stat/alarm",
+        "alarms"
+    ),
+    list!(
+        "unifi_get_alerts",
+        "Alerts",
+        "events",
+        "stat/alarm",
+        "alerts"
+    ),
+    list!(
+        "unifi_get_anomalies",
+        "Anomalies",
+        "events",
+        "stat/anomalies",
+        "anomalies"
+    ),
+    list!(
+        "unifi_list_rogue_aps",
+        "Rogue APs",
+        "wireless",
+        "stat/rogueap",
+        "rogue_aps"
+    ),
+    list!(
+        "unifi_list_port_forwards",
+        "Port Forwards",
+        "routing",
+        "rest/portforward",
+        "port_forwards"
+    ),
+    detail!(
+        "unifi_get_port_forward",
+        "Port Forward Details",
+        "routing",
+        "rest/portforward",
+        "port_forward_id",
+        CONFIG_IDS
+    ),
+    list!(
+        "unifi_list_routes",
+        "Static Routes",
+        "routing",
+        "rest/routing",
+        "routes"
+    ),
+    detail!(
+        "unifi_get_route_details",
+        "Route Details",
+        "routing",
+        "rest/routing",
+        "route_id",
+        CONFIG_IDS
+    ),
+    list!(
+        "unifi_list_active_routes",
+        "Active Routes",
+        "routing",
+        "stat/routing",
+        "routes"
+    ),
+    list!(
+        "unifi_list_usergroups",
+        "User Groups",
+        "clients",
+        "list/usergroup",
+        "usergroups"
+    ),
+    detail!(
+        "unifi_get_usergroup_details",
+        "User Group Details",
+        "clients",
+        "list/usergroup",
+        "usergroup_id",
+        CONFIG_IDS
+    ),
+    list!(
+        "unifi_list_firewall_groups",
+        "Firewall Groups",
+        "firewall",
+        "rest/firewallgroup",
+        "firewall_groups"
+    ),
+    detail!(
+        "unifi_get_firewall_group_details",
+        "Firewall Group Details",
+        "firewall",
+        "rest/firewallgroup",
+        "firewall_group_id",
+        CONFIG_IDS
+    ),
+    list!(
+        "unifi_list_legacy_firewall_rules",
+        "Legacy Firewall Rules",
+        "firewall",
+        "rest/firewallrule",
+        "firewall_rules"
+    ),
+    list!(
+        "unifi_list_port_profiles",
+        "Port Profiles",
+        "switch",
+        "rest/portconf",
+        "port_profiles"
+    ),
+    detail!(
+        "unifi_get_port_profile_details",
+        "Port Profile Details",
+        "switch",
+        "rest/portconf",
+        "port_profile_id",
+        CONFIG_IDS
+    ),
+    list!(
+        "unifi_get_network_stats",
+        "Network Statistics",
+        "statistics",
+        "stat/report/hourly.site",
+        "statistics"
+    ),
+    list!(
+        "unifi_get_gateway_stats",
+        "Gateway Statistics",
+        "statistics",
+        "stat/health",
+        "statistics"
+    ),
+    list!(
+        "unifi_get_top_clients",
+        "Top Clients",
+        "statistics",
+        "stat/sta",
+        "clients"
+    ),
+    list!(
+        "unifi_get_dpi_stats",
+        "DPI Statistics",
+        "statistics",
+        "stat/sitedpi",
+        "statistics"
+    ),
+    list!(
+        "unifi_get_site_dpi_traffic",
+        "Site DPI Traffic",
+        "statistics",
+        "stat/sitedpi",
+        "traffic"
+    ),
+    list!(
+        "unifi_get_speedtest_results",
+        "Speed Test Results",
+        "statistics",
+        "stat/speedtest-result",
+        "results"
+    ),
+    list!(
+        "unifi_get_site_settings",
+        "Site Settings",
+        "system",
+        "get/setting",
+        "settings"
+    ),
+    list!(
+        "unifi_get_mgmt_settings",
+        "Management Settings",
+        "system",
+        "get/setting/mgmt",
+        "settings"
+    ),
+    list!(
+        "unifi_get_snmp_settings",
+        "SNMP Settings",
+        "system",
+        "get/setting/snmp",
+        "settings"
+    ),
+    list!(
+        "unifi_get_system_info",
+        "System Information",
+        "system",
+        "stat/sysinfo",
+        "system"
+    ),
+    list!(
+        "unifi_list_backups",
+        "Backups",
+        "system",
+        "cmd/backup",
+        "backups"
+    ),
+    spec!(
+        "unifi_raw_network_endpoint",
+        "Raw Read-only Endpoint",
+        "raw",
+        "Call an explicitly allowlisted read-only UniFi Network endpoint.",
+        ToolKind::Raw
+    ),
 ];
 
-#[tool_router]
 impl UnifiMcp {
     fn new(unifi: UnifiClient) -> Self {
         Self { unifi }
     }
+    fn find_tool(name: &str) -> Option<&'static ToolSpec> {
+        TOOLS.iter().find(|tool| tool.name == name)
+    }
 
-    #[tool(
-        name = "unifi_tool_index",
-        description = "List the UniFi tools exposed by this Rust MCP server.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn tool_index(
-        &self,
-        Parameters(args): Parameters<ToolIndexArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let category = args
-            .category
-            .as_deref()
-            .map(|value| value.to_ascii_lowercase());
-        let search = args
-            .search
-            .as_deref()
-            .map(|value| value.to_ascii_lowercase());
-        let tools = TOOL_CATALOG
+    async fn dispatch(&self, name: &str, args: Map<String, Value>, nested: bool) -> Value {
+        let Some(spec) = Self::find_tool(name) else {
+            return error_envelope(format!("Unknown UniFi Network tool '{name}'"));
+        };
+        if nested
+            && matches!(
+                spec.kind,
+                ToolKind::Index | ToolKind::Execute | ToolKind::Batch
+            )
+        {
+            return error_envelope("Meta-tools cannot recursively execute other meta-tools");
+        }
+        match self.run(spec, args).await {
+            Ok(data) => success_envelope(data),
+            Err(err) => error_envelope(format!("Failed to run {name}: {err}")),
+        }
+    }
+
+    async fn run(&self, spec: &ToolSpec, args: Map<String, Value>) -> Result<Value> {
+        match spec.kind {
+            ToolKind::Index => Ok(self.tool_index(&args)),
+            ToolKind::Execute => {
+                let name = required_string(&args, "name")?;
+                let inner = object_arg(&args, "arguments")?;
+                Ok(Box::pin(self.dispatch(name, inner, true)).await)
+            }
+            ToolKind::Batch => {
+                let calls = args
+                    .get("calls")
+                    .and_then(Value::as_array)
+                    .context("calls must be an array")?;
+                if calls.len() > 20 {
+                    bail!("batch supports at most 20 calls");
+                }
+                let mut results = Vec::with_capacity(calls.len());
+                for call in calls {
+                    let object = call
+                        .as_object()
+                        .context("each batch call must be an object")?;
+                    let name = required_string(object, "name")?;
+                    let inner = object_arg(object, "arguments")?;
+                    let result = Box::pin(self.dispatch(name, inner, true)).await;
+                    results.push(json!({"name": name, "result": result}));
+                }
+                Ok(json!({"count": results.len(), "results": results}))
+            }
+            ToolKind::Dashboard => self.dashboard().await,
+            ToolKind::List {
+                endpoint,
+                output_key,
+            } => self.list(endpoint, output_key, &args).await,
+            ToolKind::Detail {
+                endpoint,
+                id_arg,
+                id_fields,
+            } => self.detail(endpoint, id_arg, id_fields, &args).await,
+            ToolKind::LookupIp => self.lookup_ip(&args).await,
+            ToolKind::Raw => self.raw(&args).await,
+        }
+    }
+
+    fn tool_index(&self, args: &Map<String, Value>) -> Value {
+        let category = optional_string(args, "category").map(str::to_ascii_lowercase);
+        let search = optional_string(args, "search").map(str::to_ascii_lowercase);
+        let tools = TOOLS
             .iter()
             .filter(|tool| {
                 category
                     .as_deref()
-                    .is_none_or(|category| tool.category == category)
+                    .is_none_or(|value| tool.category == value)
+                    && search.as_deref().is_none_or(|value| {
+                        tool.name.to_ascii_lowercase().contains(value)
+                            || tool.title.to_ascii_lowercase().contains(value)
+                            || tool.description.to_ascii_lowercase().contains(value)
+                    })
             })
-            .filter(|tool| {
-                search.as_deref().is_none_or(|search| {
-                    tool.name.to_ascii_lowercase().contains(search)
-                        || tool.category.to_ascii_lowercase().contains(search)
-                        || tool.description.to_ascii_lowercase().contains(search)
-                })
+            .map(|tool| {
+                json!({"name":tool.name,"title":tool.title,"category":tool.category,
+            "description":tool.description,"read_only":true})
             })
             .collect::<Vec<_>>();
-
-        json_result(json!({
-            "count": tools.len(),
-            "tools": tools
-        }))
+        json!({"count":tools.len(),"tools":tools})
     }
 
-    #[tool(
-        name = "unifi_network_status",
-        description = "Return a compact UniFi Network status summary for devices, clients, Wi-Fi networks, and rogue APs.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn network_status(&self) -> Result<CallToolResult, McpError> {
-        let devices = self.fetch_network("stat/device", Some(MAX_LIMIT)).await?;
-        let clients = self.fetch_network("stat/sta", Some(MAX_LIMIT)).await?;
-        let wlans = self.fetch_network("list/wlanconf", Some(MAX_LIMIT)).await?;
-        let rogue_aps = self.fetch_network("stat/rogueap", Some(MAX_LIMIT)).await?;
-
-        let device_rows = extract_rows(&devices);
-        let client_rows = extract_rows(&clients);
-        let wlan_rows = extract_rows(&wlans);
-        let rogue_rows = extract_rows(&rogue_aps);
-
-        json_result(json!({
-            "site": &self.unifi.site,
-            "counts": {
-                "devices": device_rows.len(),
-                "online_clients": client_rows.len(),
-                "wifi_networks": wlan_rows.len(),
-                "rogue_aps": rogue_rows.len()
-            },
-            "devices": compact_rows(device_rows, 50, &[
-                "name", "model", "type", "mac", "ip", "version", "state", "adopted", "connected_at"
-            ]),
-            "wifi_networks": compact_rows(wlan_rows, 50, &[
-                "name", "enabled", "security", "wlan_band", "schedule_enabled", "_id"
-            ])
-        }))
-    }
-
-    #[tool(
-        name = "unifi_list_devices",
-        description = "List UniFi Network devices for the configured site.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn list_devices(
+    async fn list(
         &self,
-        Parameters(args): Parameters<ListDevicesArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let limit = bounded_limit(args.limit);
-        let payload = self.fetch_network("stat/device", Some(limit)).await?;
-        let rows = extract_rows(&payload);
-
-        json_result(json!({
-            "site": &self.unifi.site,
-            "count": rows.len(),
-            "devices": compact_rows(rows, limit, &[
-                "name", "model", "type", "mac", "ip", "version", "state", "adopted",
-                "inform_url", "uplink", "port_table"
-            ])
-        }))
-    }
-
-    #[tool(
-        name = "unifi_list_clients",
-        description = "List UniFi Network clients for the configured site.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn list_clients(
-        &self,
-        Parameters(args): Parameters<ListClientsArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let limit = bounded_limit(args.limit);
-        let endpoint = if args.online_only.unwrap_or(true) {
-            "stat/sta"
-        } else {
-            "stat/alluser"
-        };
-        let payload = self.fetch_network(endpoint, Some(MAX_LIMIT)).await?;
-        let mut rows = extract_rows(&payload);
-
-        if let Some(query) = args
-            .query
-            .as_deref()
+        endpoint: &str,
+        output_key: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let limit = bounded_limit(
+            args.get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize),
+        );
+        let mut rows = extract_rows_owned(
+            self.unifi
+                .network_request(Method::GET, endpoint, Some(json!({"_limit":MAX_LIMIT})))
+                .await?,
+        );
+        if output_key == "blocked_clients" {
+            rows.retain(|row| row.get("blocked").and_then(Value::as_bool).unwrap_or(false));
+        }
+        if let Some(query) = optional_string(args, "query")
             .map(str::trim)
-            .filter(|query| !query.is_empty())
+            .filter(|v| !v.is_empty())
         {
-            rows.retain(|row| matches_client_query(row, query));
+            rows.retain(|row| value_contains(row, query));
         }
-
-        json_result(json!({
-            "site": &self.unifi.site,
-            "source_endpoint": endpoint,
-            "count": rows.len(),
-            "clients": compact_rows(rows, limit, &[
-                "name", "hostname", "mac", "ip", "oui", "essid", "is_wired",
-                "uptime", "last_seen", "signal", "rssi", "tx_rate", "rx_rate",
-                "sw_mac", "ap_mac", "network"
-            ])
-        }))
+        let total_count = rows.len();
+        let summary = args.get("summary").and_then(Value::as_bool).unwrap_or(true);
+        if summary {
+            rows = compact_endpoint_rows(endpoint, rows, limit);
+        } else {
+            rows.truncate(limit);
+        }
+        Ok(
+            json!({"site":self.unifi.site,"total_count":total_count,"returned_count":rows.len(),output_key:rows}),
+        )
     }
 
-    #[tool(
-        name = "unifi_list_wlans",
-        description = "List configured UniFi Wi-Fi networks for the configured site.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn list_wlans(&self) -> Result<CallToolResult, McpError> {
-        let payload = self.fetch_network("list/wlanconf", Some(MAX_LIMIT)).await?;
-        let rows = extract_rows(&payload);
-
-        json_result(json!({
-            "site": &self.unifi.site,
-            "count": rows.len(),
-            "wifi_networks": compact_rows(rows, MAX_LIMIT, &[
-                "name", "enabled", "security", "wlan_band", "usergroup_id",
-                "schedule_enabled", "mac_filter_enabled", "_id"
-            ])
-        }))
-    }
-
-    #[tool(
-        name = "unifi_list_rogue_aps",
-        description = "List rogue access points detected by UniFi Network.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn list_rogue_aps(&self) -> Result<CallToolResult, McpError> {
-        let payload = self.fetch_network("stat/rogueap", Some(MAX_LIMIT)).await?;
-        let rows = extract_rows(&payload);
-
-        json_result(json!({
-            "site": &self.unifi.site,
-            "count": rows.len(),
-            "rogue_aps": compact_rows(rows, MAX_LIMIT, &[
-                "essid", "bssid", "channel", "signal", "rssi", "oui",
-                "last_seen", "first_seen", "is_adhoc"
-            ])
-        }))
-    }
-
-    #[tool(
-        name = "unifi_list_talk_sites",
-        description = "List UniFi Talk sites visible to the configured API key.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn list_talk_sites(&self) -> Result<CallToolResult, McpError> {
-        let payload = self
-            .unifi
-            .talk_get("integration/v1/sites")
-            .await
-            .map_err(tool_error)?;
-
-        json_result(payload)
-    }
-
-    #[tool(
-        name = "unifi_raw_network_endpoint",
-        description = "Call a read-only allowlisted UniFi Network API endpoint and return its JSON response.",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true
-        )
-    )]
-    async fn raw_network_endpoint(
+    async fn detail(
         &self,
-        Parameters(args): Parameters<RawNetworkEndpointArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let endpoint = args.endpoint.trim().trim_start_matches('/');
-        if !ALLOWED_NETWORK_ENDPOINTS.contains(&endpoint) {
-            return Err(McpError::invalid_params(
-                "endpoint is not in the read-only allowlist",
-                Some(json!({
-                    "endpoint": args.endpoint,
-                    "allowed": ALLOWED_NETWORK_ENDPOINTS
-                })),
-            ));
-        }
-
-        let payload = self
-            .unifi
-            .network_post(endpoint, Some(bounded_limit(args.limit)))
-            .await
-            .map_err(tool_error)?;
-
-        json_result(payload)
+        endpoint: &str,
+        id_arg: &str,
+        id_fields: &[&str],
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let identifier = required_string(args, id_arg)?;
+        let rows = extract_rows_owned(
+            self.unifi
+                .network_request(Method::GET, endpoint, Some(json!({"_limit":MAX_LIMIT})))
+                .await?,
+        );
+        rows.into_iter()
+            .find(|row| {
+                id_fields.iter().any(|field| {
+                    row.get(*field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| v.eq_ignore_ascii_case(identifier))
+                })
+            })
+            .with_context(|| format!("No resource matched {id_arg} '{identifier}'"))
     }
 
-    async fn fetch_network(&self, endpoint: &str, limit: Option<usize>) -> Result<Value, McpError> {
-        self.unifi
-            .network_post(endpoint, limit)
-            .await
-            .map_err(tool_error)
+    async fn lookup_ip(&self, args: &Map<String, Value>) -> Result<Value> {
+        let ip = required_string(args, "ip_address")?;
+        let (clients, devices) = tokio::join!(
+            self.unifi.network_request(
+                Method::GET,
+                "stat/alluser",
+                Some(json!({"_limit":MAX_LIMIT}))
+            ),
+            self.unifi.network_request(
+                Method::GET,
+                "stat/device",
+                Some(json!({"_limit":MAX_LIMIT}))
+            )
+        );
+        let mut matches = Vec::new();
+        for (kind, payload) in [("client", clients?), ("device", devices?)] {
+            for row in extract_rows_owned(payload) {
+                if row.get("ip").and_then(Value::as_str) == Some(ip) {
+                    matches.push(json!({"kind":kind,"data":row}));
+                }
+            }
+        }
+        Ok(json!({"ip_address":ip,"count":matches.len(),"matches":matches}))
+    }
+
+    async fn dashboard(&self) -> Result<Value> {
+        let health = self
+            .unifi
+            .network_request(
+                Method::GET,
+                "stat/health",
+                Some(json!({"_limit":MAX_LIMIT})),
+            )
+            .await?;
+        let devices = self
+            .unifi
+            .network_request(
+                Method::GET,
+                "stat/device",
+                Some(json!({"_limit":MAX_LIMIT})),
+            )
+            .await?;
+        let clients = self
+            .unifi
+            .network_request(Method::GET, "stat/sta", Some(json!({"_limit":MAX_LIMIT})))
+            .await?;
+        let wlans = self
+            .unifi
+            .network_request(
+                Method::GET,
+                "list/wlanconf",
+                Some(json!({"_limit":MAX_LIMIT})),
+            )
+            .await?;
+        let alarms = self
+            .unifi
+            .network_request(Method::GET, "stat/alarm", Some(json!({"_limit":25})))
+            .await?;
+        let events = self
+            .unifi
+            .network_request(Method::GET, "stat/event", Some(json!({"_limit":25})))
+            .await?;
+        Ok(
+            json!({"site":self.unifi.site,"counts":{"devices":extract_rows_owned(devices.clone()).len(),"online_clients":extract_rows_owned(clients).len(),"wlans":extract_rows_owned(wlans.clone()).len(),"alarms":extract_rows_owned(alarms).len(),"events":extract_rows_owned(events).len()},"health":extract_rows_owned(health),"devices":compact_rows(extract_rows_owned(devices),50,&["name","model","type","mac","ip","version","state","adopted"]),"wlans":compact_rows(extract_rows_owned(wlans),50,&["name","enabled","security","wlan_band","_id"])}),
+        )
+    }
+
+    async fn raw(&self, args: &Map<String, Value>) -> Result<Value> {
+        const ALLOWED: &[&str] = &[
+            "stat/sta",
+            "stat/alluser",
+            "stat/rogueap",
+            "list/wlanconf",
+            "stat/device",
+            "stat/health",
+            "stat/event",
+            "stat/alarm",
+            "rest/networkconf",
+            "rest/portforward",
+            "rest/routing",
+            "rest/firewallgroup",
+            "rest/firewallrule",
+            "rest/portconf",
+            "list/usergroup",
+            "get/setting",
+            "stat/sysinfo",
+            "stat/sitedpi",
+        ];
+        let endpoint = required_string(args, "endpoint")?
+            .trim()
+            .trim_start_matches('/');
+        if !ALLOWED.contains(&endpoint) {
+            bail!("endpoint is not in the read-only allowlist");
+        }
+        let limit = bounded_limit(
+            args.get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize),
+        );
+        let payload = self
+            .unifi
+            .network_request(Method::GET, endpoint, Some(json!({"_limit":limit})))
+            .await?;
+        Ok(truncate_payload(payload, limit))
     }
 }
 
-#[tool_handler(
-    name = "unifi-mcp",
-    version = "0.1.0",
-    instructions = "Read-only local UniFi MCP server. Use unifi_tool_index to see the available tools."
-)]
-impl ServerHandler for UnifiMcp {}
+impl ServerHandler for UnifiMcp {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions("Rust UniFi Network MCP with upstream-compatible discovery, response envelopes, and read-only diagnostics.")
+    }
+    async fn list_tools(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult {
+            result_type: Some(ResultType::COMPLETE),
+            tools: TOOLS.iter().map(tool_model).collect(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: None,
+            cache_scope: None,
+        })
+    }
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        Self::find_tool(name).map(tool_model)
+    }
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        let value = self
+            .dispatch(&request.name, request.arguments.unwrap_or_default(), false)
+            .await;
+        Ok(CallToolResult::structured(value).into())
+    }
+}
 
 impl UnifiConfig {
     fn from_env() -> Result<Self> {
         let base_url = resolve_base_url()?;
-        let site = env_pair("UNIFI_NETWORK_SITE", "UNIFI_SITE")
-            .unwrap_or_else(|| DEFAULT_SITE.to_string());
-        let api_key = secret_env_pair("UNIFI_NETWORK_API_KEY", "UNIFI_API_KEY")?;
+        let site =
+            env_pair("UNIFI_NETWORK_SITE", "UNIFI_SITE").unwrap_or_else(|| DEFAULT_SITE.into());
+        let api_key = optional_secret_env_pair("UNIFI_NETWORK_API_KEY", "UNIFI_API_KEY")?;
+        let username = env_pair("UNIFI_NETWORK_USERNAME", "UNIFI_USERNAME");
+        let password = optional_secret_env_pair("UNIFI_NETWORK_PASSWORD", "UNIFI_PASSWORD")?;
+        if api_key.is_none() && (username.is_none() || password.is_none()) {
+            bail!("configure an API key or both a local username and password");
+        }
+        if username.is_some() != password.is_some() {
+            bail!("local authentication requires both username and password");
+        }
         let insecure_tls =
-            if let Some(verify_ssl) = env_pair("UNIFI_NETWORK_VERIFY_SSL", "UNIFI_VERIFY_SSL") {
-                !parse_bool_value("UNIFI_NETWORK_VERIFY_SSL/UNIFI_VERIFY_SSL", &verify_ssl)?
+            if let Some(verify) = env_pair("UNIFI_NETWORK_VERIFY_SSL", "UNIFI_VERIFY_SSL") {
+                !parse_bool_value("UNIFI_NETWORK_VERIFY_SSL/UNIFI_VERIFY_SSL", &verify)?
             } else {
                 parse_bool_env_pair("UNIFI_NETWORK_INSECURE_TLS", "UNIFI_INSECURE_TLS", false)?
             };
@@ -424,11 +775,12 @@ impl UnifiConfig {
             "UNIFI_REDACT_SENSITIVE_FIELDS",
             true,
         )?;
-
         Ok(Self {
             base_url,
             site,
             api_key,
+            username,
+            password,
             insecure_tls,
             redact_sensitive_fields,
         })
@@ -438,233 +790,416 @@ impl UnifiConfig {
 impl UnifiClient {
     fn new(config: UnifiConfig) -> Result<Self> {
         let client = Client::builder()
+            .cookie_store(true)
             .danger_accept_invalid_certs(config.insecure_tls)
+            .timeout(Duration::from_secs(30))
             .build()
             .context("failed to build UniFi HTTP client")?;
-
         Ok(Self {
             client,
             base_url: config.base_url,
             site: config.site,
             api_key: config.api_key,
+            username: config.username,
+            password: config.password,
+            authenticated: Arc::new(Mutex::new(false)),
             redact_sensitive_fields: config.redact_sensitive_fields,
         })
     }
-
-    async fn network_post(&self, endpoint: &str, limit: Option<usize>) -> Result<Value> {
-        let url = self.network_url(endpoint)?;
-        let response = self
-            .client
-            .post(url)
-            .header("X-API-Key", &self.api_key)
-            .json(&json!({ "_limit": bounded_limit(limit) }))
-            .send()
-            .await
-            .context("UniFi Network request failed")?;
-
-        self.parse_response(response.status(), response.text().await?)
-            .await
-    }
-
-    async fn talk_get(&self, path: &str) -> Result<Value> {
-        let url = self.proxy_url("talk", path)?;
-        let response = self
-            .client
-            .get(url)
-            .header("X-API-Key", &self.api_key)
-            .send()
-            .await
-            .context("UniFi Talk request failed")?;
-
-        self.parse_response(response.status(), response.text().await?)
-            .await
-    }
-
-    async fn parse_response(&self, status: StatusCode, body: String) -> Result<Value> {
-        let mut value = parse_json_response(status, body).await?;
-        if self.redact_sensitive_fields {
-            redact_sensitive(&mut value);
+    async fn ensure_login(&self) -> Result<()> {
+        if self.api_key.is_some() {
+            return Ok(());
         }
-        Ok(value)
+        let mut authenticated = self.authenticated.lock().await;
+        if *authenticated {
+            return Ok(());
+        }
+        let username = self
+            .username
+            .as_deref()
+            .context("local username is not configured")?;
+        let password = self
+            .password
+            .as_deref()
+            .context("local password is not configured")?;
+        let body = json!({"username":username,"password":password,"remember":true});
+        let mut last_status = None;
+        for path in ["api/auth/login", "api/login"] {
+            let response = self
+                .client
+                .post(self.root_url(path)?)
+                .json(&body)
+                .send()
+                .await
+                .context("UniFi login request failed")?;
+            last_status = Some(response.status());
+            if response.status().is_success() {
+                *authenticated = true;
+                return Ok(());
+            }
+            if response.status() != StatusCode::NOT_FOUND {
+                break;
+            }
+        }
+        bail!(
+            "UniFi local login failed with HTTP {}",
+            last_status.unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+        )
     }
-
+    async fn network_request(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        self.ensure_login().await?;
+        let url = self.network_url(endpoint)?;
+        let mut delay = 100;
+        for attempt in 0..3 {
+            let mut request = self
+                .client
+                .request(method.clone(), url.clone())
+                .header("Accept", "application/json");
+            if let Some(key) = &self.api_key {
+                request = request.header("X-API-Key", key);
+            }
+            if let Some(body) = &body {
+                request = request.json(body);
+            }
+            let response = request
+                .send()
+                .await
+                .context("UniFi Network request failed")?;
+            let status = response.status();
+            let text = response.text().await?;
+            if matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504) && attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                delay *= 2;
+                continue;
+            }
+            let mut value = parse_json_response(status, text)?;
+            if self.redact_sensitive_fields {
+                redact_sensitive(&mut value);
+            }
+            return Ok(value);
+        }
+        unreachable!()
+    }
     fn network_url(&self, endpoint: &str) -> Result<Url> {
-        let endpoint = endpoint.trim().trim_start_matches('/');
-        let path = format!("network/api/s/{}/{}", self.site, endpoint);
-        self.proxy_url_path(&path)
+        self.proxy_url_path(&format!(
+            "network/api/s/{}/{}",
+            self.site,
+            endpoint.trim().trim_start_matches('/')
+        ))
     }
-
-    fn proxy_url(&self, app: &str, path: &str) -> Result<Url> {
-        let path = format!("{}/{}", app.trim_matches('/'), path.trim_matches('/'));
-        self.proxy_url_path(&path)
+    fn root_url(&self, path: &str) -> Result<Url> {
+        let mut url = self.base_url.clone();
+        let prefix = url.path().trim_end_matches('/');
+        url.set_path(&format!("{prefix}/{}", path.trim_start_matches('/')));
+        url.set_query(None);
+        url.set_fragment(None);
+        Ok(url)
     }
-
     fn proxy_url_path(&self, path: &str) -> Result<Url> {
         let mut url = self.base_url.clone();
         let prefix = url.path().trim_end_matches('/');
-        let path = path.trim_start_matches('/');
-        let combined_path = if prefix.is_empty() || prefix == "/" {
-            format!("/proxy/{path}")
+        url.set_path(&if prefix.is_empty() || prefix == "/" {
+            format!("/proxy/{}", path.trim_start_matches('/'))
         } else {
-            format!("{prefix}/proxy/{path}")
-        };
-        url.set_path(&combined_path);
+            format!("{prefix}/proxy/{}", path.trim_start_matches('/'))
+        });
         url.set_query(None);
         url.set_fragment(None);
         Ok(url)
     }
 }
 
-async fn parse_json_response(status: StatusCode, body: String) -> Result<Value> {
-    if !status.is_success() {
-        bail!("UniFi API returned HTTP {status}: {body}");
-    }
-
-    serde_json::from_str(&body).with_context(|| format!("UniFi API returned non-JSON body: {body}"))
+fn tool_model(spec: &ToolSpec) -> Tool {
+    let input_schema = match spec.kind {
+        ToolKind::Index => schema(
+            json!({"category":{"type":"string"},"search":{"type":"string"}}),
+            &[],
+        ),
+        ToolKind::Execute => schema(
+            json!({"name":{"type":"string"},"arguments":{"type":"object"}}),
+            &["name"],
+        ),
+        ToolKind::Batch => schema(
+            json!({"calls":{"type":"array","maxItems":20,"items":{"type":"object","required":["name"],"properties":{"name":{"type":"string"},"arguments":{"type":"object"}}}}}),
+            &["calls"],
+        ),
+        ToolKind::Detail { id_arg, .. } => schema(json!({id_arg:{"type":"string"}}), &[id_arg]),
+        ToolKind::LookupIp => schema(json!({"ip_address":{"type":"string"}}), &["ip_address"]),
+        ToolKind::Raw => schema(
+            json!({"endpoint":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":500}}),
+            &["endpoint"],
+        ),
+        ToolKind::List { .. } => schema(
+            json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"},"summary":{"type":"boolean","description":"Return compact records. Defaults to true; set false only when the full selected controller record is required."}}),
+            &[],
+        ),
+        ToolKind::Dashboard => schema(json!({}), &[]),
+    };
+    Tool::new(
+        Cow::Borrowed(spec.name),
+        Cow::Borrowed(spec.description),
+        Arc::new(input_schema),
+    )
+    .with_title(spec.title)
+    .with_annotations(
+        ToolAnnotations::with_title(spec.title)
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true)
+            .open_world(false),
+    )
 }
-
-fn extract_rows(value: &Value) -> Vec<&Value> {
-    if let Some(rows) = value.get("data").and_then(Value::as_array) {
-        return rows.iter().collect();
+fn schema(properties: Value, required: &[&str]) -> JsonObject {
+    let mut object = Map::new();
+    object.insert("type".into(), json!("object"));
+    object.insert("additionalProperties".into(), json!(false));
+    object.insert("properties".into(), properties);
+    if !required.is_empty() {
+        object.insert("required".into(), json!(required));
     }
-
-    if let Some(rows) = value.get("items").and_then(Value::as_array) {
-        return rows.iter().collect();
-    }
-
-    if let Some(rows) = value.as_array() {
-        return rows.iter().collect();
-    }
-
-    vec![value]
+    object
 }
-
-fn compact_rows(rows: Vec<&Value>, limit: usize, fields: &[&str]) -> Vec<Value> {
-    rows.into_iter()
-        .take(limit)
-        .map(|row| {
-            let Some(object) = row.as_object() else {
-                return row.clone();
-            };
-
-            let mut compact = serde_json::Map::new();
-            for field in fields {
-                if let Some(value) = object.get(*field) {
-                    compact.insert((*field).to_string(), value.clone());
-                }
-            }
-
-            if compact.is_empty() {
-                row.clone()
-            } else {
-                Value::Object(compact)
-            }
-        })
-        .collect()
-}
-
-fn matches_client_query(row: &Value, query: &str) -> bool {
-    let query = query.to_ascii_lowercase();
-    [
-        "name", "hostname", "mac", "ip", "oui", "essid", "network", "sw_mac", "ap_mac",
-    ]
-    .iter()
-    .filter_map(|field| row.get(*field))
-    .filter_map(value_as_search_text)
-    .any(|value| value.to_ascii_lowercase().contains(&query))
-}
-
-fn value_as_search_text(value: &Value) -> Option<String> {
-    match value {
-        Value::String(value) => Some(value.clone()),
-        Value::Number(value) => Some(value.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        _ => None,
+fn success_envelope(data: Value) -> Value {
+    if data.get("success").is_some() {
+        data
+    } else {
+        json!({"success":true,"data":data})
     }
 }
-
+fn error_envelope(message: impl Into<String>) -> Value {
+    json!({"success":false,"error":message.into()})
+}
+fn required_string<'a>(args: &'a Map<String, Value>, key: &str) -> Result<&'a str> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .with_context(|| format!("{key} must be a non-empty string"))
+}
+fn optional_string<'a>(args: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    args.get(key).and_then(Value::as_str)
+}
+fn object_arg(args: &Map<String, Value>, key: &str) -> Result<Map<String, Value>> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(Map::new()),
+        Some(Value::Object(v)) => Ok(v.clone()),
+        _ => bail!("{key} must be an object"),
+    }
+}
 fn bounded_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
 }
-
-fn resolve_base_url() -> Result<Url> {
-    if let Some(base_url) = env_pair("UNIFI_NETWORK_BASE_URL", "UNIFI_BASE_URL") {
-        return Url::parse(&base_url).with_context(|| {
-            format!("UNIFI_NETWORK_BASE_URL/UNIFI_BASE_URL is not a valid URL: {base_url}")
-        });
-    }
-
-    if let Some(host) = env_pair("UNIFI_NETWORK_HOST", "UNIFI_HOST") {
-        let base_url = if host.starts_with("http://") || host.starts_with("https://") {
-            host
-        } else if let Some(port) =
-            env_pair("UNIFI_NETWORK_PORT", "UNIFI_PORT").filter(|port| port != "443")
-        {
-            format!("https://{host}:{port}")
-        } else {
-            format!("https://{host}")
-        };
-
-        return Url::parse(&base_url)
-            .with_context(|| format!("UniFi host produced an invalid URL: {base_url}"));
-    }
-
-    Url::parse(DEFAULT_BASE_URL).context("default UniFi base URL is invalid")
+fn value_contains(value: &Value, query: &str) -> bool {
+    value
+        .to_string()
+        .to_ascii_lowercase()
+        .contains(&query.to_ascii_lowercase())
 }
-
+fn extract_rows_owned(value: Value) -> Vec<Value> {
+    if let Some(rows) = value.get("data").and_then(Value::as_array) {
+        rows.clone()
+    } else if let Some(rows) = value.get("items").and_then(Value::as_array) {
+        rows.clone()
+    } else if let Value::Array(rows) = value {
+        rows
+    } else {
+        vec![value]
+    }
+}
+fn compact_rows(rows: Vec<Value>, limit: usize, fields: &[&str]) -> Vec<Value> {
+    rows.into_iter()
+        .take(limit)
+        .map(|row| {
+            let Some(obj) = row.as_object() else {
+                return row;
+            };
+            let mut out = Map::new();
+            for field in fields {
+                if let Some(value) = obj.get(*field) {
+                    out.insert((*field).into(), value.clone());
+                }
+            }
+            Value::Object(out)
+        })
+        .collect()
+}
+fn compact_endpoint_rows(endpoint: &str, rows: Vec<Value>, limit: usize) -> Vec<Value> {
+    let fields: &[&str] = match endpoint {
+        "stat/device" => &[
+            "_id", "name", "model", "type", "mac", "ip", "version", "state", "adopted", "uptime",
+        ],
+        "stat/sta" | "stat/alluser" => &[
+            "_id",
+            "name",
+            "hostname",
+            "mac",
+            "ip",
+            "oui",
+            "essid",
+            "is_wired",
+            "signal",
+            "rssi",
+            "uptime",
+            "last_seen",
+            "blocked",
+        ],
+        "list/wlanconf" => &[
+            "_id",
+            "name",
+            "enabled",
+            "security",
+            "wlan_band",
+            "networkconf_id",
+            "is_guest",
+        ],
+        "stat/rogueap" => &[
+            "essid",
+            "bssid",
+            "channel",
+            "signal",
+            "rssi",
+            "oui",
+            "last_seen",
+            "first_seen",
+            "is_adhoc",
+        ],
+        "stat/event" | "stat/alarm" => &[
+            "_id",
+            "key",
+            "msg",
+            "datetime",
+            "time",
+            "last_seen",
+            "archived",
+            "severity",
+            "subsystem",
+        ],
+        "stat/health" => &[
+            "subsystem",
+            "status",
+            "num_adopted",
+            "num_disconnected",
+            "num_sta",
+            "uptime",
+            "wan_ip",
+            "gw_name",
+        ],
+        "rest/networkconf" => &[
+            "_id",
+            "name",
+            "purpose",
+            "enabled",
+            "vlan",
+            "ip_subnet",
+            "networkgroup",
+        ],
+        "rest/portforward" => &[
+            "_id",
+            "name",
+            "enabled",
+            "dst_port",
+            "fwd",
+            "proto",
+            "wan_interface",
+        ],
+        "rest/routing" => &["_id", "name", "enabled", "network", "static_ip", "type"],
+        "rest/firewallgroup" => &["_id", "name", "group_type", "group_members"],
+        "rest/firewallrule" => &[
+            "_id",
+            "name",
+            "enabled",
+            "action",
+            "ruleset",
+            "protocol",
+            "src_address",
+            "dst_address",
+        ],
+        "rest/portconf" => &[
+            "_id",
+            "name",
+            "forward",
+            "native_networkconf_id",
+            "poe_mode",
+            "speed",
+        ],
+        "list/usergroup" => &["_id", "name", "qos_rate_max_down", "qos_rate_max_up"],
+        _ => &[],
+    };
+    if fields.is_empty() {
+        rows.into_iter().take(limit).collect()
+    } else {
+        compact_rows(rows, limit, fields)
+    }
+}
+fn truncate_payload(mut payload: Value, limit: usize) -> Value {
+    if let Some(rows) = payload.get_mut("data").and_then(Value::as_array_mut) {
+        rows.truncate(limit);
+    }
+    payload
+}
+fn parse_json_response(status: StatusCode, body: String) -> Result<Value> {
+    if !status.is_success() {
+        bail!("UniFi API returned HTTP {status}");
+    }
+    serde_json::from_str(&body).context("UniFi API returned a non-JSON response")
+}
+fn resolve_base_url() -> Result<Url> {
+    if let Some(value) = env_pair("UNIFI_NETWORK_BASE_URL", "UNIFI_BASE_URL") {
+        return Url::parse(&value).with_context(|| format!("invalid UniFi base URL: {value}"));
+    }
+    if let Some(host) = env_pair("UNIFI_NETWORK_HOST", "UNIFI_HOST") {
+        let value = if host.starts_with("http://") || host.starts_with("https://") {
+            host
+        } else {
+            format!(
+                "https://{host}:{}",
+                env_pair("UNIFI_NETWORK_PORT", "UNIFI_PORT").unwrap_or_else(|| "443".into())
+            )
+        };
+        return Url::parse(&value).context("invalid UniFi host");
+    }
+    Url::parse(DEFAULT_BASE_URL).context("invalid default URL")
+}
 fn env_pair(primary: &str, fallback: &str) -> Option<String> {
     env::var(primary)
         .ok()
-        .filter(|value| !value.is_empty())
-        .or_else(|| env::var(fallback).ok().filter(|value| !value.is_empty()))
+        .filter(|v| !v.is_empty())
+        .or_else(|| env::var(fallback).ok().filter(|v| !v.is_empty()))
 }
-
-fn secret_env_pair(primary: &str, fallback: &str) -> Result<String> {
-    if let Some(value) = read_secret_env(primary)? {
-        return Ok(value);
+fn optional_secret_env_pair(primary: &str, fallback: &str) -> Result<Option<String>> {
+    if let Some(v) = read_secret_env(primary)? {
+        return Ok(Some(v));
     }
-
-    read_secret_env(fallback)?.with_context(|| format!("{primary} or {fallback} is required"))
+    read_secret_env(fallback)
 }
-
 fn read_secret_env(name: &str) -> Result<Option<String>> {
-    let direct = env::var(name).ok().filter(|value| !value.is_empty());
-    let file_var = format!("{name}_FILE");
-    let file = env::var(&file_var).ok().filter(|value| !value.is_empty());
-
+    let direct = env::var(name).ok().filter(|v| !v.is_empty());
+    let file_name = format!("{name}_FILE");
+    let file = env::var(&file_name).ok().filter(|v| !v.is_empty());
     match (direct, file) {
-        (Some(_), Some(_)) => bail!("set only one of {name} or {file_var}"),
-        (Some(value), None) => Ok(Some(value)),
-        (None, Some(path)) => read_secret_file(&file_var, &path).map(Some),
+        (Some(_), Some(_)) => bail!("set only one of {name} or {file_name}"),
+        (Some(v), None) => Ok(Some(v)),
+        (None, Some(path)) => {
+            let value =
+                fs::read_to_string(path).with_context(|| format!("failed to read {file_name}"))?;
+            let value = value.trim_end_matches(['\n', '\r']);
+            if value.is_empty() || value.contains(['\n', '\r']) || value.len() > 8192 {
+                bail!("{file_name} must point to a short, non-empty, single-line file");
+            }
+            Ok(Some(value.into()))
+        }
         (None, None) => Ok(None),
     }
 }
-
-fn read_secret_file(name: &str, path: &str) -> Result<String> {
-    let contents =
-        fs::read_to_string(path).with_context(|| format!("failed to read secret file {name}"))?;
-    let value = contents.trim_end_matches(['\n', '\r']);
-
-    if value.is_empty() {
-        bail!("{name} points to an empty secret file");
-    }
-    if value.contains('\n') || value.contains('\r') {
-        bail!("{name} points to a multi-line secret file");
-    }
-    if value.len() > 8192 {
-        bail!("{name} points to an unexpectedly large secret file");
-    }
-
-    Ok(value.to_string())
-}
-
 fn parse_bool_env_pair(primary: &str, fallback: &str, default: bool) -> Result<bool> {
-    match env_pair(primary, fallback) {
-        Some(value) => parse_bool_value(&format!("{primary}/{fallback}"), &value),
-        None => Ok(default),
-    }
+    env_pair(primary, fallback).map_or(Ok(default), |v| {
+        parse_bool_value(&format!("{primary}/{fallback}"), &v)
+    })
 }
-
 fn parse_bool_value(name: &str, value: &str) -> Result<bool> {
     match value.to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -672,68 +1207,106 @@ fn parse_bool_value(name: &str, value: &str) -> Result<bool> {
         _ => bail!("{name} must be true or false"),
     }
 }
-
 fn redact_sensitive(value: &mut Value) {
     match value {
-        Value::Object(object) => {
-            for (key, child) in object.iter_mut() {
-                if is_sensitive_field(key) {
-                    *child = Value::String(REDACTED.to_string());
+        Value::Object(obj) => {
+            for (key, child) in obj {
+                if is_sensitive_field(key) && !child.is_boolean() && !child.is_null() {
+                    *child = Value::String(REDACTED.into())
                 } else {
-                    redact_sensitive(child);
+                    redact_sensitive(child)
                 }
             }
         }
-        Value::Array(values) => {
-            for child in values {
-                redact_sensitive(child);
+        Value::Array(items) => {
+            for item in items {
+                redact_sensitive(item)
             }
         }
         _ => {}
     }
 }
-
 fn is_sensitive_field(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
-    key.contains("password")
-        || key.contains("passphrase")
-        || key.contains("preshared")
-        || key.contains("private_key")
-        || key.contains("privatekey")
-        || key.contains("secret")
-        || key.contains("api_key")
-        || key.contains("apikey")
-        || key.contains("token")
-        || key.contains("mgmt_key")
-        || key.contains("management_key")
-        || key.contains("ssh_key")
-        || key.contains("sshkey")
-        || key.contains("snmp_community")
-        || key.contains("auth_key")
-        || key.contains("encryption_key")
-        || key == "x_passphrase"
-        || key == "x_password"
-        || key == "x_ssh_password"
-        || key == "wep_key"
-        || key == "wpa_key"
-        || key == "psk"
-        || key == "pin"
-        || key == "vpn_config"
-        || key == "wireguard_config"
-        || key == "ovpn"
-}
-
-fn json_result(value: Value) -> Result<CallToolResult, McpError> {
-    match serde_json::to_string_pretty(&value) {
-        Ok(text) => Ok(CallToolResult::success(vec![ContentBlock::text(text)])),
-        Err(err) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-            "failed to serialize UniFi response: {err}"
-        ))])),
+    if key == "token_count"
+        || key == "token_counts"
+        || key.ends_with("_token_count")
+        || key.ends_with("_token_counts")
+    {
+        return false;
     }
-}
-
-fn tool_error(err: anyhow::Error) -> McpError {
-    McpError::internal_error(err.to_string(), None)
+    matches!(
+        key.as_str(),
+        "auth"
+            | "password"
+            | "passphrase"
+            | "x_passphrase"
+            | "x_password"
+            | "x_ssh_password"
+            | "wep_key"
+            | "wpa_key"
+            | "psk"
+            | "pin"
+            | "private_key"
+            | "privatekey"
+            | "private_preshared_keys"
+            | "privatepresharedkeys"
+            | "preshared_key"
+            | "presharedkey"
+            | "api_key"
+            | "apikey"
+            | "api_token"
+            | "auth_key"
+            | "authkey"
+            | "token"
+            | "mgmt_key"
+            | "management_key"
+            | "x_mgmt_key"
+            | "ssh_key"
+            | "sshkey"
+            | "snmp_community"
+            | "encryption_key"
+            | "vpn_config"
+            | "wireguard_config"
+            | "ovpn"
+            | "x_iapp_key"
+            | "x_authkey"
+            | "x_auth_key"
+            | "x_inform_authkey"
+            | "x_vwirekey"
+            | "x_ca_key"
+            | "x_server_key"
+            | "x_shared_client_key"
+            | "syslog_key"
+            | "community"
+            | "tls_auth"
+            | "tls_crypt"
+            | "pin_code"
+            | "rtsp_alias"
+            | "rtsp_url"
+            | "rtsps_url"
+            | "rtsps_streams"
+            | "openvpn_configuration"
+            | "wireguard_client_configuration_file"
+            | "wireguard_server_configuration_file"
+    ) || key
+        .split(|c: char| !c.is_ascii_alphanumeric() || c == '_')
+        .any(|part| {
+            matches!(
+                part,
+                "password"
+                    | "passwd"
+                    | "passphrase"
+                    | "psk"
+                    | "secret"
+                    | "token"
+                    | "authorization"
+                    | "cookie"
+            )
+        })
+        || key.ends_with("_password")
+        || key.ends_with("_secret")
+        || key.ends_with("_private_key")
 }
 
 #[tokio::main]
@@ -742,44 +1315,67 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
-
-    let config = UnifiConfig::from_env()?;
-    let unifi = UnifiClient::new(config)?;
-    let service = UnifiMcp::new(unifi).serve(stdio()).await?;
+    let server = UnifiMcp::new(UnifiClient::new(UnifiConfig::from_env()?)?);
+    let service = server.serve(stdio()).await?;
     service.waiting().await?;
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn redacts_nested_sensitive_fields() {
-        let mut payload = json!({
-            "data": [{
-                "name": "Guest WiFi",
-                "x_passphrase": "secret-passphrase",
-                "vpn": {
-                    "private_key": "secret-private-key",
-                    "public_key": "safe-public-key"
-                }
-            }]
-        });
-
-        redact_sensitive(&mut payload);
-
-        assert_eq!(payload["data"][0]["name"], "Guest WiFi");
-        assert_eq!(payload["data"][0]["x_passphrase"], REDACTED);
-        assert_eq!(payload["data"][0]["vpn"]["private_key"], REDACTED);
-        assert_eq!(payload["data"][0]["vpn"]["public_key"], "safe-public-key");
-    }
-
-    #[test]
-    fn bounds_tool_limits() {
-        assert_eq!(bounded_limit(None), DEFAULT_LIMIT);
+    fn bounds_limits() {
+        assert_eq!(bounded_limit(None), 100);
         assert_eq!(bounded_limit(Some(0)), 1);
-        assert_eq!(bounded_limit(Some(MAX_LIMIT + 1)), MAX_LIMIT);
+        assert_eq!(bounded_limit(Some(501)), 500);
+    }
+    #[test]
+    fn redacts_secrets_without_redacting_flags() {
+        let mut value = json!({"x_passphrase":"secret","passphrase_autogenerated":true,"private_preshared_keys_enabled":true,"nested":{"api_key":"secret"}});
+        redact_sensitive(&mut value);
+        assert_eq!(value["x_passphrase"], REDACTED);
+        assert_eq!(value["nested"]["api_key"], REDACTED);
+        assert_eq!(value["passphrase_autogenerated"], true);
+        assert_eq!(value["private_preshared_keys_enabled"], true);
+    }
+    #[test]
+    fn redacts_controller_key_material_and_tokens() {
+        let mut value = json!({
+            "x_authkey": "controller-auth-key",
+            "x_iapp_key": "iapp-key",
+            "x_vwirekey": "vwire-key",
+            "guest_token": "guest-token",
+            "private_preshared_keys": ["psk"],
+            "sae_psk": ["sae-psk"],
+            "token_count": 7,
+        });
+        redact_sensitive(&mut value);
+        for key in [
+            "x_authkey",
+            "x_iapp_key",
+            "x_vwirekey",
+            "guest_token",
+            "private_preshared_keys",
+            "sae_psk",
+        ] {
+            assert_eq!(value[key], REDACTED);
+        }
+        assert_eq!(value["token_count"], 7);
+    }
+    #[test]
+    fn catalog_names_are_unique() {
+        let mut names = TOOLS.iter().map(|t| t.name).collect::<Vec<_>>();
+        let total = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), total);
+    }
+    #[test]
+    fn catalog_is_read_only() {
+        for tool in TOOLS {
+            let model = tool_model(tool);
+            assert_eq!(model.annotations.unwrap().read_only_hint, Some(true));
+        }
     }
 }

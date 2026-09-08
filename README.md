@@ -1,23 +1,40 @@
 # Unifi-MCP
 
-Local, on-demand MCP server for UniFi Network and UniFi Talk.
+Local, on-demand Rust MCP server for UniFi Network.
 
 This is a Rust stdio MCP. It does not listen on a TCP port. An MCP client starts
 the binary as a child process and talks to it over stdin/stdout.
 
-## Tools
+## Compatibility target
 
-- `unifi_tool_index` - compact list of tools exposed by this server.
-- `unifi_network_status` - compact summary of devices, online clients, Wi-Fi
-  networks, and rogue APs.
-- `unifi_list_devices` - read-only UniFi Network device inventory.
-- `unifi_list_clients` - read-only client inventory, with optional online-only and
-  query filters.
-- `unifi_list_wlans` - configured Wi-Fi networks.
-- `unifi_list_rogue_aps` - rogue access points detected by UniFi.
-- `unifi_list_talk_sites` - UniFi Talk sites visible to the API key.
-- `unifi_raw_network_endpoint` - constrained read-only escape hatch for allowlisted
-  UniFi Network endpoints.
+The tool names and response contract are being brought into parity with the
+Network server from [`the upstream compatibility project`](),
+implemented natively in Rust. The current release exposes 46 read-only tools
+covering discovery, batching, dashboards, devices, clients, WLANs, networks,
+events, alarms, routing, firewall inventory, switching, statistics, DPI, and
+system settings.
+
+Every tool returns the standard envelope used by the reference server:
+
+```json
+{"success": true, "data": {}}
+```
+
+Handled failures return `{"success": false, "error": "..."}`. Full results are
+also supplied as MCP structured content.
+
+The reference project currently supports Network, Protect, and Access. It does
+not expose a supported UniFi Talk server, so this project no longer advertises
+the former non-working Talk endpoint.
+
+Use `unifi_tool_index` to browse the catalogue, `unifi_execute` for indirect
+execution, and `unifi_batch` for bounded read-only batches. MCP clients may also
+discover and invoke every domain tool directly.
+
+Mutating tools are intentionally withheld until the reference server's complete
+preview-confirm, policy-gate, and post-write verification contract is ported.
+
+## Raw endpoint allowlist
 
 The current Network endpoint allowlist is:
 
@@ -26,6 +43,19 @@ The current Network endpoint allowlist is:
 - `stat/rogueap`
 - `list/wlanconf`
 - `stat/device`
+- `stat/health`
+- `stat/event`
+- `stat/alarm`
+- `rest/networkconf`
+- `rest/portforward`
+- `rest/routing`
+- `rest/firewallgroup`
+- `rest/firewallrule`
+- `rest/portconf`
+- `list/usergroup`
+- `get/setting`
+- `stat/sysinfo`
+- `stat/sitedpi`
 
 ## Configuration
 
@@ -41,14 +71,18 @@ Server-specific variables take priority over shared `UNIFI_*` fallbacks.
 | `UNIFI_NETWORK_SITE` | `UNIFI_SITE` | No | `default` | UniFi Network site id. |
 | `UNIFI_NETWORK_API_KEY` | `UNIFI_API_KEY` | Yes | | UniFi API key. Do not commit this. |
 | `UNIFI_NETWORK_API_KEY_FILE` | `UNIFI_API_KEY_FILE` | No | | File containing the API key. |
+| `UNIFI_NETWORK_USERNAME` | `UNIFI_USERNAME` | Conditional | | Local controller account. Required with a password when no API key is supplied. |
+| `UNIFI_NETWORK_PASSWORD` | `UNIFI_PASSWORD` | Conditional | | Local controller password. |
+| `UNIFI_NETWORK_PASSWORD_FILE` | `UNIFI_PASSWORD_FILE` | No | | File containing the local controller password. |
 | `UNIFI_NETWORK_VERIFY_SSL` | `UNIFI_VERIFY_SSL` | No | | Set to `false` for a local self-signed controller certificate. |
 | `UNIFI_NETWORK_INSECURE_TLS` | `UNIFI_INSECURE_TLS` | No | `false` | Alternative TLS flag when `*_VERIFY_SSL` is not set. |
 | `UNIFI_NETWORK_REDACT_SENSITIVE_FIELDS` | `UNIFI_REDACT_SENSITIVE_FIELDS` | No | `true` | Redacts known secret fields before MCP responses. |
 | `RUST_LOG` | | No | | Rust tracing filter, for example `info`. |
 
-The server does not load `.env` files automatically. Put env values in the MCP
-client config, export them in the launcher, or point `*_API_KEY_FILE` at a
-trusted file.
+The server accepts either an API key or a local username/password pair. An API
+key takes precedence when both are configured. The server does not load `.env`
+files automatically. Put env values in the MCP client config, export them in the
+launcher, or point a supported secret variable at a trusted `*_FILE`.
 
 Known secret-bearing fields are redacted by default, including Wi-Fi
 passphrases, passwords, API keys, tokens, VPN key material, SNMP community
