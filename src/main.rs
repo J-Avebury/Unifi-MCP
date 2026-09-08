@@ -80,6 +80,38 @@ macro_rules! action {
         )
     };
 }
+macro_rules! v2_list {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr, $key:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!("Read ", $title, " from the UniFi Network Integration API."),
+            ToolKind::V2List {
+                endpoint: $endpoint,
+                output_key: $key
+            }
+        )
+    };
+}
+macro_rules! v2_detail {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr, $arg:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!(
+                "Return ",
+                $title,
+                " from the UniFi Network Integration API."
+            ),
+            ToolKind::V2Detail {
+                endpoint: $endpoint,
+                id_arg: $arg
+            }
+        )
+    };
+}
 
 #[derive(Clone)]
 struct UnifiMcp {
@@ -95,6 +127,7 @@ struct UnifiClient {
     username: Option<String>,
     password: Option<String>,
     authenticated: Arc<Mutex<bool>>,
+    integration_site_id: Arc<Mutex<Option<String>>>,
     redact_sensitive_fields: bool,
 }
 
@@ -125,6 +158,14 @@ enum ToolKind {
     },
     LookupIp,
     Raw,
+    V2List {
+        endpoint: &'static str,
+        output_key: &'static str,
+    },
+    V2Detail {
+        endpoint: &'static str,
+        id_arg: &'static str,
+    },
     Action {
         endpoint: &'static str,
         command: &'static str,
@@ -479,6 +520,125 @@ const TOOLS: &[ToolSpec] = &[
         "Call an explicitly allowlisted read-only UniFi Network endpoint.",
         ToolKind::Raw
     ),
+    v2_list!(
+        "unifi_list_acl_rules",
+        "ACL Rules",
+        "acl",
+        "acl-rules",
+        "acl_rules"
+    ),
+    v2_detail!(
+        "unifi_get_acl_rule_details",
+        "ACL Rule Details",
+        "acl",
+        "acl-rules",
+        "acl_rule_id"
+    ),
+    v2_list!(
+        "unifi_list_ap_groups",
+        "AP Groups",
+        "wireless",
+        "apgroups",
+        "ap_groups"
+    ),
+    v2_detail!(
+        "unifi_get_ap_group_details",
+        "AP Group Details",
+        "wireless",
+        "apgroups",
+        "ap_group_id"
+    ),
+    v2_list!(
+        "unifi_list_client_groups",
+        "Client Groups",
+        "clients",
+        "network-members-groups",
+        "client_groups"
+    ),
+    v2_detail!(
+        "unifi_get_client_group_details",
+        "Client Group Details",
+        "clients",
+        "network-members-group",
+        "client_group_id"
+    ),
+    v2_list!(
+        "unifi_list_content_filters",
+        "Content Filters",
+        "security",
+        "content-filtering",
+        "content_filters"
+    ),
+    v2_detail!(
+        "unifi_get_content_filter_details",
+        "Content Filter Details",
+        "security",
+        "content-filtering",
+        "content_filter_id"
+    ),
+    v2_list!(
+        "unifi_list_dns_records",
+        "DNS Records",
+        "dns",
+        "static-dns",
+        "dns_records"
+    ),
+    v2_detail!(
+        "unifi_get_dns_record_details",
+        "DNS Record Details",
+        "dns",
+        "static-dns",
+        "dns_record_id"
+    ),
+    v2_list!(
+        "unifi_list_firewall_policies",
+        "Firewall Policies",
+        "firewall",
+        "firewall-policies",
+        "firewall_policies"
+    ),
+    v2_detail!(
+        "unifi_get_firewall_policy_details",
+        "Firewall Policy Details",
+        "firewall",
+        "firewall-policies",
+        "firewall_policy_id"
+    ),
+    v2_list!(
+        "unifi_list_firewall_zones",
+        "Firewall Zones",
+        "firewall",
+        "firewall/zones",
+        "firewall_zones"
+    ),
+    v2_list!(
+        "unifi_list_qos_rules",
+        "QoS Rules",
+        "qos",
+        "qos-rules",
+        "qos_rules"
+    ),
+    v2_detail!(
+        "unifi_get_qos_rule_details",
+        "QoS Rule Details",
+        "qos",
+        "qos-rules",
+        "qos_rule_id"
+    ),
+    v2_list!(
+        "unifi_list_traffic_routes",
+        "Traffic Routes",
+        "routing",
+        "trafficroutes",
+        "traffic_routes"
+    ),
+    v2_detail!(
+        "unifi_get_traffic_route_details",
+        "Traffic Route Details",
+        "routing",
+        "trafficroutes",
+        "traffic_route_id"
+    ),
     action!(
         "unifi_block_client",
         "Block Client",
@@ -608,6 +768,13 @@ impl UnifiMcp {
             } => self.detail(endpoint, id_arg, id_fields, &args).await,
             ToolKind::LookupIp => self.lookup_ip(&args).await,
             ToolKind::Raw => self.raw(&args).await,
+            ToolKind::V2List {
+                endpoint,
+                output_key,
+            } => self.v2_list(endpoint, output_key, &args).await,
+            ToolKind::V2Detail { endpoint, id_arg } => {
+                self.v2_detail(endpoint, id_arg, &args).await
+            }
             ToolKind::Action {
                 endpoint,
                 command,
@@ -811,6 +978,45 @@ impl UnifiMcp {
         Ok(truncate_payload(payload, limit))
     }
 
+    async fn v2_list(
+        &self,
+        endpoint: &str,
+        output_key: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let limit = bounded_limit(
+            args.get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize),
+        );
+        let mut rows = extract_rows_owned(
+            self.unifi
+                .integration_request(Method::GET, endpoint, None)
+                .await?,
+        );
+        if let Some(query) = optional_string(args, "query")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            rows.retain(|row| value_contains(row, query));
+        }
+        let total_count = rows.len();
+        rows.truncate(limit);
+        Ok(json!({"total_count":total_count,"returned_count":rows.len(),output_key:rows}))
+    }
+
+    async fn v2_detail(
+        &self,
+        endpoint: &str,
+        id_arg: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let identifier = required_string(args, id_arg)?;
+        self.unifi
+            .integration_request(Method::GET, &format!("{endpoint}/{identifier}"), None)
+            .await
+    }
+
     async fn action(
         &self,
         endpoint: &str,
@@ -926,6 +1132,7 @@ impl UnifiClient {
             username: config.username,
             password: config.password,
             authenticated: Arc::new(Mutex::new(false)),
+            integration_site_id: Arc::new(Mutex::new(None)),
             redact_sensitive_fields: config.redact_sensitive_fields,
         })
     }
@@ -1008,10 +1215,81 @@ impl UnifiClient {
         }
         unreachable!()
     }
+    async fn integration_request(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        if self.api_key.is_none() {
+            bail!(
+                "The UniFi Network Integration API requires UNIFI_NETWORK_API_KEY or UNIFI_API_KEY"
+            );
+        }
+        let site_id = self.integration_site().await?;
+        let url = self.integration_url(&site_id, endpoint)?;
+        let mut request = self
+            .client
+            .request(method, url)
+            .header("Accept", "application/json");
+        if let Some(api_key) = &self.api_key {
+            request = request.header("X-API-Key", api_key);
+        }
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request
+            .send()
+            .await
+            .context("UniFi Network Integration API request failed")?;
+        let status = response.status();
+        let text = response.text().await?;
+        if status == StatusCode::NOT_FOUND {
+            bail!(
+                "Integration API endpoint '{endpoint}' is not supported by this controller version or enabled feature set"
+            );
+        }
+        let mut value = parse_json_response(status, text)?;
+        if self.redact_sensitive_fields {
+            redact_sensitive(&mut value);
+        }
+        Ok(value)
+    }
+    async fn integration_site(&self) -> Result<String> {
+        let mut cached = self.integration_site_id.lock().await;
+        if let Some(site_id) = cached.as_ref() {
+            return Ok(site_id.clone());
+        }
+        let api_key = self
+            .api_key
+            .as_deref()
+            .context("Integration API key is not configured")?;
+        let url = self.proxy_url_path("network/integration/v1/sites")?;
+        let response = self
+            .client
+            .get(url)
+            .header("Accept", "application/json")
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("UniFi Network Integration site discovery failed")?;
+        let status = response.status();
+        let body = response.text().await?;
+        let payload = parse_json_response(status, body)?;
+        let site_id = integration_site_id_from_payload(&payload, &self.site)?;
+        *cached = Some(site_id.clone());
+        Ok(site_id)
+    }
     fn network_url(&self, endpoint: &str) -> Result<Url> {
         self.proxy_url_path(&format!(
             "network/api/s/{}/{}",
             self.site,
+            endpoint.trim().trim_start_matches('/')
+        ))
+    }
+    fn integration_url(&self, site_id: &str, endpoint: &str) -> Result<Url> {
+        self.proxy_url_path(&format!(
+            "network/integration/v1/sites/{site_id}/{}",
             endpoint.trim().trim_start_matches('/')
         ))
     }
@@ -1061,6 +1339,11 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"},"summary":{"type":"boolean","description":"Return compact records. Defaults to true; set false only when the full selected controller record is required."}}),
             &[],
         ),
+        ToolKind::V2List { .. } => schema(
+            json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"}}),
+            &[],
+        ),
+        ToolKind::V2Detail { id_arg, .. } => schema(json!({id_arg:{"type":"string"}}), &[id_arg]),
         ToolKind::Dashboard => schema(json!({}), &[]),
         ToolKind::Action { id_arg, .. } => schema(
             json!({id_arg:{"type":"string"},"confirm":{"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."}}),
@@ -1118,6 +1401,23 @@ fn required_string<'a>(args: &'a Map<String, Value>, key: &str) -> Result<&'a st
 }
 fn optional_string<'a>(args: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     args.get(key).and_then(Value::as_str)
+}
+fn integration_site_id_from_payload(payload: &Value, legacy_site: &str) -> Result<String> {
+    let sites = payload
+        .get("data")
+        .and_then(Value::as_array)
+        .context("Integration site discovery returned no site list")?;
+    let site = sites
+        .iter()
+        .find(|site| site.get("internalReference").and_then(Value::as_str) == Some(legacy_site))
+        .with_context(|| {
+            format!("Integration site discovery found no site matching legacy site '{legacy_site}'")
+        })?;
+    site.get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+        .context("Integration site discovery returned a matching site without an ID")
 }
 fn object_arg(args: &Map<String, Value>, key: &str) -> Result<Map<String, Value>> {
     match args.get(key) {
@@ -1524,5 +1824,24 @@ mod tests {
                 assert_eq!(annotations.idempotent_hint, Some(idempotent));
             }
         }
+    }
+    #[test]
+    fn integration_site_selection_uses_matching_legacy_site() {
+        let payload = json!({"data":[
+            {"id":"first-uuid","internalReference":"first"},
+            {"id":"default-uuid","internalReference":"default"}
+        ]});
+        assert_eq!(
+            integration_site_id_from_payload(&payload, "default").unwrap(),
+            "default-uuid"
+        );
+    }
+    #[test]
+    fn integration_site_selection_never_falls_back_to_another_site() {
+        let payload = json!({"data":[{"id":"first-uuid","internalReference":"first"}]});
+        let error = integration_site_id_from_payload(&payload, "default")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no site matching legacy site 'default'"));
     }
 }

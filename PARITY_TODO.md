@@ -12,10 +12,10 @@ done below passes.
 
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
-| Network | 194 | 51 | 50/194 (25.8%) | In progress |
+| Network | 194 | 68 | 67/194 (34.5%) | In progress |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Total | 293 | 51 | 50/293 (17.1%) | Not at parity |
+| Total | 293 | 68 | 67/293 (22.9%) | Not at parity |
 
 `unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
 additional catalogue entry that does not count toward exact upstream-name
@@ -34,6 +34,10 @@ parity.
 - [x] Initial mutation contract: explicit MCP annotations, preview before
   `confirm: true`, and batch-level write rejection.
 - [x] Initial mutations: block/unblock/reconnect client; reboot/upgrade device.
+- [x] Integration-v2 API boundary: API-key requirement, verified local site-ID
+  discovery, cached UUID mapping, and capability-aware 404 responses.
+- [x] V2 inventory/detail tools: ACL rules, AP groups, client groups, content
+  filters, DNS, firewall policies/zones, QoS rules, and traffic routes.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 

@@ -9,10 +9,16 @@ the binary as a child process and talks to it over stdin/stdout.
 
 The tool names and response contract are being brought into parity with the
 Network server from [`the upstream compatibility project`](),
-implemented natively in Rust. The current release exposes 46 read-only tools
+implemented natively in Rust. The current release exposes 63 read-only tools
 covering discovery, batching, dashboards, devices, clients, WLANs, networks,
 events, alarms, routing, firewall inventory, switching, statistics, DPI, and
 system settings.
+
+The Integration API inventory tools resolve the controller's UUID site ID from
+the configured legacy site reference before making a request. They require an
+API key and deliberately refuse to fall back to a different site if no exact
+mapping exists. Controllers that do not support a given Integration endpoint
+return a clear capability error rather than an ambiguous empty result.
 
 Every tool returns the standard envelope used by the reference server:
 
