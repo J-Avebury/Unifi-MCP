@@ -163,6 +163,19 @@ macro_rules! integration_list {
         )
     };
 }
+macro_rules! integration_object {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!("Read ", $title, " from the UniFi Network Integration API."),
+            ToolKind::IntegrationObject {
+                endpoint: $endpoint
+            }
+        )
+    };
+}
 
 #[derive(Clone)]
 struct UnifiMcp {
@@ -233,6 +246,9 @@ enum ToolKind {
     IntegrationList {
         endpoint: &'static str,
         output_key: &'static str,
+    },
+    IntegrationObject {
+        endpoint: &'static str,
     },
     Action {
         endpoint: &'static str,
@@ -852,6 +868,12 @@ const TOOLS: &[ToolSpec] = &[
         "v1/sites",
         "sites"
     ),
+    integration_object!(
+        "unifi_get_api_application_info",
+        "Official Network Application Info",
+        "system",
+        "v1/info"
+    ),
     v2_list!(
         "unifi_list_api_vouchers",
         "Official Hotspot Vouchers",
@@ -1088,6 +1110,11 @@ impl UnifiMcp {
                 endpoint,
                 output_key,
             } => self.integration_list(endpoint, output_key, &args).await,
+            ToolKind::IntegrationObject { endpoint } => {
+                self.unifi
+                    .integration_global_request(Method::GET, endpoint, 1)
+                    .await
+            }
             ToolKind::Action {
                 endpoint,
                 command,
@@ -1819,6 +1846,7 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"}}),
             &[],
         ),
+        ToolKind::IntegrationObject { .. } => schema(json!({}), &[]),
         ToolKind::V2Detail { id_arg, .. } => schema(json!({id_arg:{"type":"string"}}), &[id_arg]),
         ToolKind::Dashboard => schema(json!({}), &[]),
         ToolKind::Action { id_arg, .. } => schema(
