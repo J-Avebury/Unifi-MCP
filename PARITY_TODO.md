@@ -47,31 +47,38 @@ parity.
 
 ## Network parity backlog
 
-### N1 — complete discovery, jobs, and diagnostic reads (53 tools)
+### N1 — remaining read-only Network batches (25 tools)
 
-- [ ] `unifi_load_tools` and `unifi_batch_status`.
-- [ ] Event subscription, support bundle, event-type, IPS, session, traffic
-  flow, client DPI/Wi-Fi/statistics, and device radio/RF/switch capability
-  reads.
-- [ ] Full list/detail coverage for ACLs, AP groups, client groups, content
-  filters, DNS, Dynamic DNS, firewall policies/zones, OON, QoS, traffic routes,
-  vouchers, VPN, and switch inventory.
+- [ ] **N1a — control-plane reads (7):** batch status, auto-backup settings,
+  gateway settings, firewall-policy ordering, OON policy list/detail, and
+  support-bundle status.
+- [ ] **N1b — client analytics (4):** client statistics, sessions, Wi-Fi
+  details, and per-client DPI traffic.
+- [ ] **N1c — device/switch/radio diagnostics (9):** device radio data, LLDP
+  neighbours, PDU outlets, port statistics, RF-scan results, speed-test
+  status, switch capabilities, switch ports, and available channels.
+- [ ] **N1d — events and traffic telemetry (5):** event types, IPS events,
+  traffic-flow statistics, traffic flows, and event subscription.
 
 Acceptance: each tool has an upstream-compatible name, schema, annotation,
 success/error envelope, bounded output, unit coverage, and a read-only live
-smoke test where the installed controller supports that endpoint.
+smoke test where the installed controller supports that endpoint. Integration
+API routes must use the documented UUID site ID and preserve controller
+`totalCount`/pagination metadata.
 
-### N2 — safe client and device action parity (16 tools)
+### N2 — safe client and device action parity (approximately 20 tools)
 
 - [ ] Adopt, forget, rename, guest authorise/de-authorise, and static client IP.
 - [ ] Force provision, locate, rename, LED control, outlet state, RF scan, and
   speed test.
+- [ ] Add controller-version and capability checks for actions exposed by the
+  Network 10.6 Integration API.
 
 Acceptance: every mutation previews the exact target and request; `confirm`
 is required; destructive/idempotency hints match upstream; no test confirms a
 live action without an explicit operator request.
 
-### N3 — configuration CRUD and write verification (75 tools)
+### N3 — configuration CRUD and write verification (approximately 72 tools)
 
 - [ ] Create/update/delete/toggle WLANs, networks, port forwards, routes,
   user groups, port profiles, client groups, ACLs, QoS, traffic routes, firewall
@@ -85,14 +92,14 @@ live action without an explicit operator request.
 Acceptance: unit tests cover validation, no-op updates, policy denial,
 preview, confirmed request shape, and failed post-write verification.
 
-### N4 — complex Network capabilities (4 tools)
+### N4 — complex Network writes and capability handling
 
-- [ ] Firewall-policy ordering and reorder operation using the Integration API.
-- [ ] Gateway settings, SNMP, auto-backup settings, and backup lifecycle.
+- [ ] Firewall-policy ordering/reorder, gateway settings, SNMP, auto-backup,
+  and backup lifecycle writes.
 - [ ] Switch port aggregation, port mirroring, STP, jumbo frames, and PoE power
   cycle.
 - [ ] Controller-version capability detection and actionable unsupported-feature
-  responses.
+  responses across both legacy and Integration API routes.
 
 Acceptance: API-key and session-auth requirements are explicit; controller ID
 families cannot be silently mixed; destructive operations remain previewed.
