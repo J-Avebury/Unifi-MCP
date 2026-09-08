@@ -3226,6 +3226,38 @@ mod tests {
         }
     }
     #[test]
+    fn official_network_switching_and_dns_surface_is_catalogued() {
+        for name in [
+            "unifi_list_switch_stacks",
+            "unifi_get_switch_stack_details",
+            "unifi_list_mc_lag_domains",
+            "unifi_get_mc_lag_domain_details",
+            "unifi_list_lags",
+            "unifi_get_lag_details",
+            "unifi_list_dns_policies",
+            "unifi_get_dns_policy_details",
+            "unifi_create_dns_policy",
+            "unifi_update_dns_policy",
+            "unifi_delete_dns_policy",
+        ] {
+            assert!(UnifiMcp::find_tool(name).is_some(), "missing {name}");
+        }
+    }
+    #[test]
+    fn integration_mutations_require_confirmation_and_preview_inputs() {
+        for name in [
+            "unifi_create_network",
+            "unifi_update_dns_policy",
+            "unifi_execute_api_port_action",
+        ] {
+            let spec = UnifiMcp::find_tool(name).expect("catalogued mutation");
+            let model = tool_model(spec);
+            let schema = model.input_schema.as_ref();
+            assert_eq!(schema["properties"]["confirm"]["type"], "boolean");
+            assert_eq!(schema["additionalProperties"], false);
+        }
+    }
+    #[test]
     fn integration_site_selection_uses_matching_legacy_site() {
         let payload = json!({"data":[
             {"id":"first-uuid","internalReference":"first"},

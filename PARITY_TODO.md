@@ -111,14 +111,14 @@ parity.
 
 ## Network parity backlog
 
-### N1 — remaining read-only Network batches (25 tools)
+### N1 — legacy compatibility diagnostics (not part of the official API baseline)
 
 - [ ] **N1a — control-plane reads (7):** batch status and event subscription
   remain; auto-backup settings, gateway settings, firewall-policy ordering,
   OON policy list/detail, and support-bundle status are now catalogued.
-- [ ] **N1b — client analytics (4):** client statistics, sessions, Wi-Fi
+- [x] **N1b — client analytics (4):** client statistics, sessions, Wi-Fi
   details, and per-client DPI traffic.
-- [ ] **N1c — device/switch/radio diagnostics (9):** device radio data, LLDP
+- [x] **N1c — device/switch/radio diagnostics (9):** device radio data, LLDP
   neighbours, PDU outlets, port statistics, RF-scan results, speed-test
   status, switch capabilities, switch ports, and available channels.
 - [ ] **N1d — events and traffic telemetry (5):** event types, IPS events,
