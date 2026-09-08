@@ -1,21 +1,54 @@
 # Rust parity tracker
 
-This is the visible implementation tracker for parity with the current
-[`the upstream compatibility project`]() reference. The
-comparison baseline is upstream commit `redacted`.
+This is the visible implementation tracker for parity with the official local
+UniFi Network API exposed by the user's Dream Machine Pro: **UniFi Network API
+10.6.101**. The supplied documentation is the primary contract: API-key
+authentication, UUID site IDs, documented request/response schemas, filtering,
+pagination, and HTTP error envelopes.
+
+The [`the upstream compatibility project`]() manifest at
+upstream commit `redacted` remains a secondary
+compatibility target, useful for preserving tool names and the older controller
+surface. Its 194 names must not be mistaken for the complete 10.6.101 API
+contract.
 
 ## Current position
 
 **Active priority: Network only.** Do not begin Protect or Access implementation
-until Network reaches its 194-tool parity target and the Network definition of
-done below passes.
+until the documented Network API 10.6.101 endpoint families are covered and the
+Network definition of done below passes.
+
+## Official API 10.6.101 baseline
+
+The documented Network surface supplied for this controller comprises these
+endpoint families:
+
+- application information and local sites;
+- adopted and pending devices, device details/statistics, and device/port
+  actions;
+- connected clients and client actions;
+- networks and network references;
+- Wi-Fi broadcasts;
+- hotspot vouchers;
+- firewall zones and policies;
+- ACL rules;
+- traffic-matching lists;
+- WAN interfaces, site-to-site VPN tunnels, VPN servers, RADIUS profiles,
+  device tags, DPI categories/applications, and countries.
+
+The implementation tracker will report official-API endpoint coverage separately
+from the secondary upstream-MCP name score below. An endpoint is only counted
+as covered when its documented path, method, authentication requirement,
+filter/pagination behaviour, schema, and error handling are implemented and
+tested.
 
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
-| Network | 194 | 78 | 77/194 (39.7%) | In progress |
+| Official Network API 10.6.101 | To be enumerated from local OpenAPI | Path coverage in progress | Not yet comparable by name | **Primary target** |
+| Secondary upstream Network names | 194 | 78 | 77/194 (39.7%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Total | 293 | 78 | 77/293 (26.3%) | Not at parity |
+| Secondary upstream total names | 293 | 78 | 77/293 (26.3%) | Compatibility view |
 
 `unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
 additional catalogue entry that does not count toward exact upstream-name
