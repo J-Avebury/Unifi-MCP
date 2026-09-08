@@ -75,7 +75,7 @@ Server-specific variables take priority over shared `UNIFI_*` fallbacks.
 
 | Server-specific | Shared fallback | Required | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `UNIFI_NETWORK_BASE_URL` | `UNIFI_BASE_URL` | No | `https://your-unifi-console.example` | Full UniFi controller URL. |
+| `UNIFI_NETWORK_BASE_URL` | `UNIFI_BASE_URL` | Yes* | | Full UniFi controller URL; configure locally and do not commit it. |
 | `UNIFI_NETWORK_HOST` | `UNIFI_HOST` | No | | Controller host if `*_BASE_URL` is not set. |
 | `UNIFI_NETWORK_PORT` | `UNIFI_PORT` | No | `443` | Used only with `*_HOST`. |
 | `UNIFI_NETWORK_SITE` | `UNIFI_SITE` | No | `default` | UniFi Network site id. |
@@ -89,8 +89,9 @@ Server-specific variables take priority over shared `UNIFI_*` fallbacks.
 | `UNIFI_NETWORK_REDACT_SENSITIVE_FIELDS` | `UNIFI_REDACT_SENSITIVE_FIELDS` | No | `true` | Redacts known secret fields before MCP responses. |
 | `RUST_LOG` | | No | | Rust tracing filter, for example `info`. |
 
-The server accepts either an API key or a local username/password pair. An API
-key takes precedence when both are configured. The server does not load `.env`
+The server requires a controller URL/host and accepts either an API key or a
+local username/password pair. An API key takes precedence when both are
+configured. The server does not load `.env`
 files automatically. Put env values in the MCP client config, export them in the
 launcher, or point a supported secret variable at a trusted `*_FILE`.
 

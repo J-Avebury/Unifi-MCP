@@ -13,7 +13,6 @@ use serde_json::{Map, Value, json};
 use std::{borrow::Cow, env, fs, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
-const DEFAULT_BASE_URL: &str = "https://your-unifi-console.example";
 const DEFAULT_SITE: &str = "default";
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
@@ -2469,7 +2468,7 @@ fn resolve_base_url() -> Result<Url> {
         };
         return Url::parse(&value).context("invalid UniFi host");
     }
-    Url::parse(DEFAULT_BASE_URL).context("invalid default URL")
+    bail!("configure UNIFI_NETWORK_BASE_URL/UNIFI_BASE_URL or UNIFI_NETWORK_HOST/UNIFI_HOST")
 }
 fn env_pair(primary: &str, fallback: &str) -> Option<String> {
     env::var(primary)

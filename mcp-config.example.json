@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "unifi": {
-      "command": "/path/to/unifi-mcp/target/release/unifi-mcp",
+      "command": "/path/to/unifi-mcp",
       "env": {
         "UNIFI_NETWORK_BASE_URL": "https://your-unifi-console.example",
         "UNIFI_NETWORK_SITE": "default",
