@@ -6,6 +6,10 @@ comparison baseline is upstream commit `redacted`.
 
 ## Current position
 
+**Active priority: Network only.** Do not begin Protect or Access implementation
+until Network reaches its 194-tool parity target and the Network definition of
+done below passes.
+
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
 | Network | 194 | 51 | 50/194 (25.8%) | In progress |
