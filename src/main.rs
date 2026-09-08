@@ -1182,6 +1182,15 @@ const TOOLS: &[ToolSpec] = &[
         true
     ),
     integration_write!(
+        "unifi_reorder_api_firewall_policies",
+        "Reorder Firewall Policies",
+        "firewall",
+        IntegrationMethod::Put,
+        "firewall/policies/ordering",
+        None,
+        true
+    ),
+    integration_write!(
         "unifi_create_acl_rule",
         "Create ACL Rule",
         "acl",
@@ -1209,6 +1218,15 @@ const TOOLS: &[ToolSpec] = &[
         false
     ),
     integration_write!(
+        "unifi_reorder_api_acl_rules",
+        "Reorder ACL Rules",
+        "acl",
+        IntegrationMethod::Put,
+        "acl-rules/ordering",
+        None,
+        true
+    ),
+    integration_write!(
         "unifi_create_traffic_matching_list",
         "Create Traffic Matching List",
         "firewall",
@@ -1233,6 +1251,15 @@ const TOOLS: &[ToolSpec] = &[
         IntegrationMethod::Delete,
         "traffic-matching-lists/{id}",
         Some("traffic_matching_list_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_delete_api_vouchers",
+        "Delete Hotspot Vouchers",
+        "hotspot",
+        IntegrationMethod::Delete,
+        "hotspot/vouchers",
+        None,
         false
     ),
     integration_write!(
