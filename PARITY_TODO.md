@@ -75,6 +75,9 @@ parity.
   clients/servers (strictly filtered from the shared network configuration
   collection by purpose).
 - [x] API-key Integration catalogue reads for DPI applications and categories.
+- [x] Official API 10.6.101 batch 1: adopted devices, connected clients,
+  networks, and Wi-Fi broadcasts (list/detail routes with documented UUID site
+  routing and `totalCount` pagination).
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 

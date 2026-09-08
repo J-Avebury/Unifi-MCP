@@ -775,6 +775,62 @@ const TOOLS: &[ToolSpec] = &[
         "trafficroutes",
         "traffic_route_id"
     ),
+    v2_list!(
+        "unifi_list_adopted_devices",
+        "Official Adopted Devices",
+        "devices",
+        "devices",
+        "devices"
+    ),
+    v2_detail!(
+        "unifi_get_adopted_device_details",
+        "Official Adopted Device Details",
+        "devices",
+        "devices",
+        "device_id"
+    ),
+    v2_list!(
+        "unifi_list_api_clients",
+        "Official Connected Clients",
+        "clients",
+        "clients",
+        "clients"
+    ),
+    v2_detail!(
+        "unifi_get_api_client_details",
+        "Official Connected Client Details",
+        "clients",
+        "clients",
+        "client_id"
+    ),
+    v2_list!(
+        "unifi_list_api_networks",
+        "Official Networks",
+        "networks",
+        "networks",
+        "networks"
+    ),
+    v2_detail!(
+        "unifi_get_api_network_details",
+        "Official Network Details",
+        "networks",
+        "networks",
+        "network_id"
+    ),
+    v2_list!(
+        "unifi_list_wifi_broadcasts",
+        "Official Wi-Fi Broadcasts",
+        "wireless",
+        "wifi/broadcasts",
+        "wifi_broadcasts"
+    ),
+    v2_detail!(
+        "unifi_get_wifi_broadcast_details",
+        "Official Wi-Fi Broadcast Details",
+        "wireless",
+        "wifi/broadcasts",
+        "wifi_broadcast_id"
+    ),
     integration_list!(
         "unifi_list_dpi_applications",
         "DPI Applications",
@@ -1233,18 +1289,27 @@ impl UnifiMcp {
                 .and_then(Value::as_u64)
                 .map(|v| v as usize),
         );
-        let mut rows = extract_rows_owned(
-            self.unifi
-                .integration_request(Method::GET, endpoint, None)
-                .await?,
-        );
+        let payload = self
+            .unifi
+            .integration_request_with_query(
+                Method::GET,
+                endpoint,
+                None,
+                &[("limit", limit.to_string()), ("offset", "0".to_owned())],
+            )
+            .await?;
+        let reported_total = payload
+            .get("totalCount")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize);
+        let mut rows = extract_rows_owned(payload);
         if let Some(query) = optional_string(args, "query")
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
             rows.retain(|row| value_contains(row, query));
         }
-        let total_count = rows.len();
+        let total_count = reported_total.unwrap_or(rows.len());
         rows.truncate(limit);
         Ok(json!({"total_count":total_count,"returned_count":rows.len(),output_key:rows}))
     }
@@ -1500,13 +1565,29 @@ impl UnifiClient {
         endpoint: &str,
         body: Option<Value>,
     ) -> Result<Value> {
+        self.integration_request_with_query(method, endpoint, body, &[])
+            .await
+    }
+    async fn integration_request_with_query(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+        query: &[(&str, String)],
+    ) -> Result<Value> {
         if self.api_key.is_none() {
             bail!(
                 "The UniFi Network Integration API requires UNIFI_NETWORK_API_KEY or UNIFI_API_KEY"
             );
         }
         let site_id = self.integration_site().await?;
-        let url = self.integration_url(&site_id, endpoint)?;
+        let mut url = self.integration_url(&site_id, endpoint)?;
+        if !query.is_empty() {
+            let mut pairs = url.query_pairs_mut();
+            for (key, value) in query {
+                pairs.append_pair(key, value);
+            }
+        }
         let mut request = self
             .client
             .request(method, url)
