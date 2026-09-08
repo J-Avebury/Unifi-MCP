@@ -63,6 +63,43 @@ macro_rules! detail {
         )
     };
 }
+macro_rules! filtered_list {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr, $key:expr, $field:expr, $value:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!("Read ", $title, " from the configured UniFi Network site."),
+            ToolKind::FilteredList {
+                endpoint: $endpoint,
+                output_key: $key,
+                filter_field: $field,
+                filter_value: $value,
+            }
+        )
+    };
+}
+macro_rules! filtered_detail {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr, $arg:expr, $fields:expr, $filter_field:expr, $filter_value:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!(
+                "Return ",
+                $title,
+                " from the configured UniFi Network site."
+            ),
+            ToolKind::FilteredDetail {
+                endpoint: $endpoint,
+                id_arg: $arg,
+                id_fields: $fields,
+                filter_field: $filter_field,
+                filter_value: $filter_value,
+            }
+        )
+    };
+}
 macro_rules! action {
     ($name:expr, $title:expr, $category:expr, $description:expr, $endpoint:expr, $command:expr, $id_arg:expr, $destructive:expr, $idempotent:expr) => {
         spec!(
@@ -155,6 +192,19 @@ enum ToolKind {
         endpoint: &'static str,
         id_arg: &'static str,
         id_fields: &'static [&'static str],
+    },
+    FilteredList {
+        endpoint: &'static str,
+        output_key: &'static str,
+        filter_field: &'static str,
+        filter_value: &'static str,
+    },
+    FilteredDetail {
+        endpoint: &'static str,
+        id_arg: &'static str,
+        id_fields: &'static [&'static str],
+        filter_field: &'static str,
+        filter_value: &'static str,
     },
     LookupIp,
     Raw,
@@ -435,6 +485,74 @@ const TOOLS: &[ToolSpec] = &[
         "rest/portconf",
         "port_profile_id",
         CONFIG_IDS
+    ),
+    list!(
+        "unifi_list_dynamic_dns",
+        "Dynamic DNS Entries",
+        "dns",
+        "rest/dynamicdns",
+        "dynamic_dns"
+    ),
+    detail!(
+        "unifi_get_dynamic_dns_entry_details",
+        "Dynamic DNS Entry Details",
+        "dns",
+        "rest/dynamicdns",
+        "entry_id",
+        CONFIG_IDS
+    ),
+    list!(
+        "unifi_list_vouchers",
+        "Hotspot Vouchers",
+        "hotspot",
+        "stat/voucher",
+        "vouchers"
+    ),
+    detail!(
+        "unifi_get_voucher_details",
+        "Voucher Details",
+        "hotspot",
+        "stat/voucher",
+        "voucher_id",
+        CONFIG_IDS
+    ),
+    filtered_list!(
+        "unifi_list_vpn_clients",
+        "VPN Clients",
+        "vpn",
+        "rest/networkconf",
+        "vpn_clients",
+        "purpose",
+        "vpn-client"
+    ),
+    filtered_detail!(
+        "unifi_get_vpn_client_details",
+        "VPN Client Details",
+        "vpn",
+        "rest/networkconf",
+        "client_id",
+        CONFIG_IDS,
+        "purpose",
+        "vpn-client"
+    ),
+    filtered_list!(
+        "unifi_list_vpn_servers",
+        "VPN Servers",
+        "vpn",
+        "rest/networkconf",
+        "vpn_servers",
+        "purpose",
+        "vpn-server"
+    ),
+    filtered_detail!(
+        "unifi_get_vpn_server_details",
+        "VPN Server Details",
+        "vpn",
+        "rest/networkconf",
+        "server_id",
+        CONFIG_IDS,
+        "purpose",
+        "vpn-server"
     ),
     list!(
         "unifi_get_network_stats",
@@ -766,6 +884,32 @@ impl UnifiMcp {
                 id_arg,
                 id_fields,
             } => self.detail(endpoint, id_arg, id_fields, &args).await,
+            ToolKind::FilteredList {
+                endpoint,
+                output_key,
+                filter_field,
+                filter_value,
+            } => {
+                self.filtered_list(endpoint, output_key, filter_field, filter_value, &args)
+                    .await
+            }
+            ToolKind::FilteredDetail {
+                endpoint,
+                id_arg,
+                id_fields,
+                filter_field,
+                filter_value,
+            } => {
+                self.filtered_detail(
+                    endpoint,
+                    id_arg,
+                    id_fields,
+                    filter_field,
+                    filter_value,
+                    &args,
+                )
+                .await
+            }
             ToolKind::LookupIp => self.lookup_ip(&args).await,
             ToolKind::Raw => self.raw(&args).await,
             ToolKind::V2List {
@@ -867,6 +1011,70 @@ impl UnifiMcp {
                     row.get(*field)
                         .and_then(Value::as_str)
                         .is_some_and(|v| v.eq_ignore_ascii_case(identifier))
+                })
+            })
+            .with_context(|| format!("No resource matched {id_arg} '{identifier}'"))
+    }
+
+    async fn filtered_list(
+        &self,
+        endpoint: &str,
+        output_key: &str,
+        filter_field: &str,
+        filter_value: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let limit = bounded_limit(
+            args.get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize),
+        );
+        let mut rows = extract_rows_owned(
+            self.unifi
+                .network_request(Method::GET, endpoint, Some(json!({"_limit":MAX_LIMIT})))
+                .await?,
+        );
+        rows.retain(|row| row.get(filter_field).and_then(Value::as_str) == Some(filter_value));
+        if let Some(query) = optional_string(args, "query")
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            rows.retain(|row| value_contains(row, query));
+        }
+        let total_count = rows.len();
+        let summary = args.get("summary").and_then(Value::as_bool).unwrap_or(true);
+        if summary {
+            rows = compact_endpoint_rows(endpoint, rows, limit);
+        } else {
+            rows.truncate(limit);
+        }
+        Ok(
+            json!({"site":self.unifi.site,"total_count":total_count,"returned_count":rows.len(),output_key:rows}),
+        )
+    }
+
+    async fn filtered_detail(
+        &self,
+        endpoint: &str,
+        id_arg: &str,
+        id_fields: &[&str],
+        filter_field: &str,
+        filter_value: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let identifier = required_string(args, id_arg)?;
+        let rows = extract_rows_owned(
+            self.unifi
+                .network_request(Method::GET, endpoint, Some(json!({"_limit":MAX_LIMIT})))
+                .await?,
+        );
+        rows.into_iter()
+            .filter(|row| row.get(filter_field).and_then(Value::as_str) == Some(filter_value))
+            .find(|row| {
+                id_fields.iter().any(|field| {
+                    row.get(*field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value.eq_ignore_ascii_case(identifier))
                 })
             })
             .with_context(|| format!("No resource matched {id_arg} '{identifier}'"))
@@ -1329,13 +1537,15 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             json!({"calls":{"type":"array","maxItems":20,"items":{"type":"object","required":["name"],"properties":{"name":{"type":"string"},"arguments":{"type":"object"}}}}}),
             &["calls"],
         ),
-        ToolKind::Detail { id_arg, .. } => schema(json!({id_arg:{"type":"string"}}), &[id_arg]),
+        ToolKind::Detail { id_arg, .. } | ToolKind::FilteredDetail { id_arg, .. } => {
+            schema(json!({id_arg:{"type":"string"}}), &[id_arg])
+        }
         ToolKind::LookupIp => schema(json!({"ip_address":{"type":"string"}}), &["ip_address"]),
         ToolKind::Raw => schema(
             json!({"endpoint":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":500}}),
             &["endpoint"],
         ),
-        ToolKind::List { .. } => schema(
+        ToolKind::List { .. } | ToolKind::FilteredList { .. } => schema(
             json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"},"summary":{"type":"boolean","description":"Return compact records. Defaults to true; set false only when the full selected controller record is required."}}),
             &[],
         ),
@@ -1561,6 +1771,16 @@ fn compact_endpoint_rows(endpoint: &str, rows: Vec<Value>, limit: usize) -> Vec<
             "native_networkconf_id",
             "poe_mode",
             "speed",
+        ],
+        "rest/dynamicdns" => &["_id", "service", "host_name", "interface", "enabled"],
+        "stat/voucher" => &[
+            "_id",
+            "code",
+            "create_time",
+            "duration",
+            "quota",
+            "used",
+            "status",
         ],
         "list/usergroup" => &["_id", "name", "qos_rate_max_down", "qos_rate_max_up"],
         _ => &[],
