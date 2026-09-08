@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "unifi": {
+      "command": "/path/to/unifi-mcp/target/release/unifi-mcp",
+      "env": {
+        "UNIFI_NETWORK_BASE_URL": "https://your-unifi-console.example",
+        "UNIFI_NETWORK_SITE": "default",
+        "UNIFI_NETWORK_API_KEY": "replace-with-a-unifi-api-key",
+        "UNIFI_NETWORK_VERIFY_SSL": "false",
+        "UNIFI_NETWORK_REDACT_SENSITIVE_FIELDS": "true"
+      }
+    }
+  }
+}
