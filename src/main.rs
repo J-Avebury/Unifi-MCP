@@ -1884,6 +1884,35 @@ impl UnifiMcp {
                 .and_then(Value::as_u64)
                 .map(|v| v as usize),
         );
+        let dpi_mac = if endpoint == "stat/sitedpi" {
+            if let Some(mac) = optional_string(args, "mac")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                Some(mac.to_owned())
+            } else if let Some(query) = optional_string(args, "query")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let clients = self
+                    .unifi
+                    .network_request(Method::GET, "stat/sta", Some(json!({"_limit":MAX_LIMIT})))
+                    .await?;
+                extract_rows_owned(clients).into_iter().find_map(|row| {
+                    value_contains(&row, query)
+                        .then(|| {
+                            row.get("mac")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                        })
+                        .flatten()
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let payload = if endpoint == "stat/session" {
             let end = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1899,6 +1928,14 @@ impl UnifiMcp {
                         "end": end
                     })),
                 )
+                .await?
+        } else if endpoint == "stat/sitedpi" {
+            let mut body = json!({"type":"by_app"});
+            if let Some(mac) = dpi_mac {
+                body["macs"] = json!([mac]);
+            }
+            self.unifi
+                .network_request(Method::POST, endpoint, Some(body))
                 .await?
         } else {
             self.unifi
@@ -2709,6 +2746,13 @@ fn tool_model(spec: &ToolSpec) -> Tool {
         ToolKind::Raw => schema(
             json!({"endpoint":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":500}}),
             &["endpoint"],
+        ),
+        ToolKind::List {
+            endpoint: "stat/sitedpi",
+            ..
+        } => schema(
+            json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"},"mac":{"type":"string","description":"Optional client MAC address for per-client DPI."},"summary":{"type":"boolean","description":"Return compact records. Defaults to true; set false only when the full selected controller record is required."}}),
+            &[],
         ),
         ToolKind::List { .. } | ToolKind::FilteredList { .. } => schema(
             json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"},"summary":{"type":"boolean","description":"Return compact records. Defaults to true; set false only when the full selected controller record is required."}}),
