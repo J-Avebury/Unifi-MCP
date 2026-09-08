@@ -1442,6 +1442,15 @@ const TOOLS: &[ToolSpec] = &[
         true
     ),
     integration_write!(
+        "unifi_adopt_device",
+        "Adopt Device",
+        "devices",
+        IntegrationMethod::Post,
+        "devices",
+        None,
+        true
+    ),
+    integration_write!(
         "unifi_remove_api_device",
         "Remove Adopted Device",
         "devices",
@@ -1451,11 +1460,29 @@ const TOOLS: &[ToolSpec] = &[
         false
     ),
     integration_write!(
+        "unifi_force_provision_device",
+        "Force Provision Device",
+        "devices",
+        IntegrationMethod::Post,
+        "devices/{id}/actions",
+        Some("device_id"),
+        true
+    ),
+    integration_write!(
         "unifi_execute_api_device_action",
         "Execute Adopted Device Action",
         "devices",
         IntegrationMethod::Post,
         "devices/{id}/actions",
+        Some("device_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_power_cycle_port",
+        "Power Cycle Device Port",
+        "switch",
+        IntegrationMethod::Post,
+        "devices/{id}/interfaces/ports/{port}/actions",
         Some("device_id"),
         true
     ),
@@ -1476,6 +1503,60 @@ const TOOLS: &[ToolSpec] = &[
         "clients/{id}/actions",
         Some("client_id"),
         true
+    ),
+    integration_write!(
+        "unifi_authorize_guest",
+        "Authorize Guest Client",
+        "clients",
+        IntegrationMethod::Post,
+        "clients/{id}/actions",
+        Some("client_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_unauthorize_guest",
+        "Unauthorize Guest Client",
+        "clients",
+        IntegrationMethod::Post,
+        "clients/{id}/actions",
+        Some("client_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_revoke_voucher",
+        "Revoke Hotspot Voucher",
+        "hotspot",
+        IntegrationMethod::Delete,
+        "hotspot/vouchers/{id}",
+        Some("voucher_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_create_wlan",
+        "Create WLAN",
+        "wireless",
+        IntegrationMethod::Post,
+        "wifi/broadcasts",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_update_wlan",
+        "Update WLAN",
+        "wireless",
+        IntegrationMethod::Put,
+        "wifi/broadcasts/{id}",
+        Some("wifi_broadcast_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_delete_wlan",
+        "Delete WLAN",
+        "wireless",
+        IntegrationMethod::Delete,
+        "wifi/broadcasts/{id}",
+        Some("wifi_broadcast_id"),
+        false
     ),
     action!(
         "unifi_block_client",

@@ -50,10 +50,10 @@ tested.
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
 | Official Network API 10.6.101 | To be enumerated from local OpenAPI | Path coverage in progress | Not yet comparable by name | **Primary target** |
-| Secondary upstream Network names | 194 | 155 | 113/194 (58.2%) | Compatibility view |
+| Secondary upstream Network names | 194 | 164 | 122/194 (62.9%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 293 | 155 | 113/293 (38.6%) | Compatibility view |
+| Secondary upstream total names | 293 | 164 | 122/293 (41.6%) | Compatibility view |
 
 `unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
 additional catalogue entry that does not count toward exact upstream-name
@@ -103,6 +103,9 @@ parity.
 - [x] Network compatibility diagnostics batch: client/device/session/DPI,
   event/IPS, RF/switch, traffic-flow, OON, and system read names routed through
   bounded legacy reads while the official API remains the primary contract.
+- [x] Network compatibility action/WLAN aliases: adopt, force provision, port
+  power-cycle, guest authorise/de-authorise, voucher revoke, and WLAN
+  create/update/delete names map to documented Integration API operations.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 
@@ -110,16 +113,17 @@ parity.
 
 ### N1 — remaining read-only Network batches (25 tools)
 
-- [ ] **N1a — control-plane reads (7):** batch status, auto-backup settings,
-  gateway settings, firewall-policy ordering, OON policy list/detail, and
-  support-bundle status.
+- [ ] **N1a — control-plane reads (7):** batch status and event subscription
+  remain; auto-backup settings, gateway settings, firewall-policy ordering,
+  OON policy list/detail, and support-bundle status are now catalogued.
 - [ ] **N1b — client analytics (4):** client statistics, sessions, Wi-Fi
   details, and per-client DPI traffic.
 - [ ] **N1c — device/switch/radio diagnostics (9):** device radio data, LLDP
   neighbours, PDU outlets, port statistics, RF-scan results, speed-test
   status, switch capabilities, switch ports, and available channels.
 - [ ] **N1d — events and traffic telemetry (5):** event types, IPS events,
-  traffic-flow statistics, traffic flows, and event subscription.
+  traffic-flow statistics, and traffic flows are catalogued; event subscription
+  remains pending.
 
 Acceptance: each tool has an upstream-compatible name, schema, annotation,
 success/error envelope, bounded output, unit coverage, and a read-only live
