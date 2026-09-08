@@ -1879,9 +1879,13 @@ impl UnifiMcp {
                 .and_then(Value::as_u64)
                 .map(|v| v as usize),
         );
+        // Some legacy controller endpoints, notably `stat/session`, reject
+        // the otherwise common `_limit` parameter. Keep the MCP-side bound
+        // while allowing those endpoints to use their controller default.
+        let request_limit = (endpoint != "stat/session").then(|| json!({"_limit":MAX_LIMIT}));
         let mut rows = extract_rows_owned(
             self.unifi
-                .network_request(Method::GET, endpoint, Some(json!({"_limit":MAX_LIMIT})))
+                .network_request(Method::GET, endpoint, request_limit)
                 .await?,
         );
         if output_key == "blocked_clients" {
