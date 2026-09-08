@@ -63,6 +63,23 @@ macro_rules! detail {
         )
     };
 }
+macro_rules! action {
+    ($name:expr, $title:expr, $category:expr, $description:expr, $endpoint:expr, $command:expr, $id_arg:expr, $destructive:expr, $idempotent:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            $description,
+            ToolKind::Action {
+                endpoint: $endpoint,
+                command: $command,
+                id_arg: $id_arg,
+                destructive: $destructive,
+                idempotent: $idempotent,
+            }
+        )
+    };
+}
 
 #[derive(Clone)]
 struct UnifiMcp {
@@ -108,6 +125,13 @@ enum ToolKind {
     },
     LookupIp,
     Raw,
+    Action {
+        endpoint: &'static str,
+        command: &'static str,
+        id_arg: &'static str,
+        destructive: bool,
+        idempotent: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -455,6 +479,61 @@ const TOOLS: &[ToolSpec] = &[
         "Call an explicitly allowlisted read-only UniFi Network endpoint.",
         ToolKind::Raw
     ),
+    action!(
+        "unifi_block_client",
+        "Block Client",
+        "clients",
+        "Block a client. Returns a preview unless confirm is true.",
+        "cmd/stamgr",
+        "block-sta",
+        "client_mac",
+        true,
+        true
+    ),
+    action!(
+        "unifi_unblock_client",
+        "Unblock Client",
+        "clients",
+        "Unblock a client. Returns a preview unless confirm is true.",
+        "cmd/stamgr",
+        "unblock-sta",
+        "client_mac",
+        false,
+        true
+    ),
+    action!(
+        "unifi_force_reconnect_client",
+        "Reconnect Client",
+        "clients",
+        "Disconnect a client so it reconnects. Returns a preview unless confirm is true.",
+        "cmd/stamgr",
+        "kick-sta",
+        "client_mac",
+        true,
+        false
+    ),
+    action!(
+        "unifi_reboot_device",
+        "Reboot Device",
+        "devices",
+        "Reboot a managed device. Returns a preview unless confirm is true.",
+        "cmd/devmgr",
+        "restart",
+        "device_mac",
+        true,
+        false
+    ),
+    action!(
+        "unifi_upgrade_device",
+        "Upgrade Device",
+        "devices",
+        "Start a managed device firmware upgrade. Returns a preview unless confirm is true.",
+        "cmd/devmgr",
+        "upgrade",
+        "device_mac",
+        true,
+        false
+    ),
 ];
 
 impl UnifiMcp {
@@ -506,6 +585,12 @@ impl UnifiMcp {
                         .context("each batch call must be an object")?;
                     let name = required_string(object, "name")?;
                     let inner = object_arg(object, "arguments")?;
+                    if Self::find_tool(name)
+                        .is_some_and(|tool| matches!(tool.kind, ToolKind::Action { .. }))
+                    {
+                        results.push(json!({"name": name, "result": error_envelope("unifi_batch accepts read-only tools only")}));
+                        continue;
+                    }
                     let result = Box::pin(self.dispatch(name, inner, true)).await;
                     results.push(json!({"name": name, "result": result}));
                 }
@@ -523,6 +608,16 @@ impl UnifiMcp {
             } => self.detail(endpoint, id_arg, id_fields, &args).await,
             ToolKind::LookupIp => self.lookup_ip(&args).await,
             ToolKind::Raw => self.raw(&args).await,
+            ToolKind::Action {
+                endpoint,
+                command,
+                id_arg,
+                destructive,
+                idempotent,
+            } => {
+                self.action(endpoint, command, id_arg, destructive, idempotent, &args)
+                    .await
+            }
         }
     }
 
@@ -714,6 +809,34 @@ impl UnifiMcp {
             .network_request(Method::GET, endpoint, Some(json!({"_limit":limit})))
             .await?;
         Ok(truncate_payload(payload, limit))
+    }
+
+    async fn action(
+        &self,
+        endpoint: &str,
+        command: &str,
+        id_arg: &str,
+        destructive: bool,
+        idempotent: bool,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let identifier = required_string(args, id_arg)?;
+        let payload = json!({"mac": identifier, "cmd": command});
+        let preview = json!({"endpoint": endpoint, "command": command, "target": {id_arg: identifier}, "destructive": destructive, "idempotent": idempotent});
+        if !args
+            .get("confirm")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(json!({"requires_confirmation": true, "preview": preview}));
+        }
+        let response = self
+            .unifi
+            .network_request(Method::POST, endpoint, Some(payload))
+            .await?;
+        Ok(
+            json!({"applied": true, "preview": preview, "controller_response": truncate_payload(response, 10)}),
+        )
     }
 }
 
@@ -939,6 +1062,10 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             &[],
         ),
         ToolKind::Dashboard => schema(json!({}), &[]),
+        ToolKind::Action { id_arg, .. } => schema(
+            json!({id_arg:{"type":"string"},"confirm":{"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."}}),
+            &[id_arg],
+        ),
     };
     Tool::new(
         Cow::Borrowed(spec.name),
@@ -948,9 +1075,18 @@ fn tool_model(spec: &ToolSpec) -> Tool {
     .with_title(spec.title)
     .with_annotations(
         ToolAnnotations::with_title(spec.title)
-            .read_only(true)
-            .destructive(false)
-            .idempotent(true)
+            .read_only(!matches!(spec.kind, ToolKind::Action { .. }))
+            .destructive(matches!(
+                spec.kind,
+                ToolKind::Action {
+                    destructive: true,
+                    ..
+                }
+            ))
+            .idempotent(match spec.kind {
+                ToolKind::Action { idempotent, .. } => idempotent,
+                _ => true,
+            })
             .open_world(false),
     )
 }
@@ -1372,10 +1508,21 @@ mod tests {
         assert_eq!(names.len(), total);
     }
     #[test]
-    fn catalog_is_read_only() {
+    fn catalog_annotations_match_mutability() {
         for tool in TOOLS {
             let model = tool_model(tool);
-            assert_eq!(model.annotations.unwrap().read_only_hint, Some(true));
+            let annotations = model.annotations.unwrap();
+            let mutating = matches!(tool.kind, ToolKind::Action { .. });
+            assert_eq!(annotations.read_only_hint, Some(!mutating));
+            if let ToolKind::Action {
+                destructive,
+                idempotent,
+                ..
+            } = tool.kind
+            {
+                assert_eq!(annotations.destructive_hint, Some(destructive));
+                assert_eq!(annotations.idempotent_hint, Some(idempotent));
+            }
         }
     }
 }

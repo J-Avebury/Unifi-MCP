@@ -31,8 +31,10 @@ Use `unifi_tool_index` to browse the catalogue, `unifi_execute` for indirect
 execution, and `unifi_batch` for bounded read-only batches. MCP clients may also
 discover and invoke every domain tool directly.
 
-Mutating tools are intentionally withheld until the reference server's complete
-preview-confirm, policy-gate, and post-write verification contract is ported.
+The initial mutation batch also includes client block/unblock/reconnect and
+device reboot/upgrade actions. Each returns a preview by default and performs
+no controller write until the caller repeats it with `confirm: true`. Mutations
+are refused by `unifi_batch`; they must be targeted and confirmed individually.
 
 ## Raw endpoint allowlist
 
