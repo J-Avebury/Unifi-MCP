@@ -176,6 +176,26 @@ macro_rules! integration_object {
         )
     };
 }
+macro_rules! integration_write {
+    ($name:expr, $title:expr, $category:expr, $method:expr, $endpoint:expr, $id_arg:expr, $body_required:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!(
+                "Preview and, after confirmation, perform ",
+                $title,
+                " through the UniFi Network Integration API."
+            ),
+            ToolKind::IntegrationWrite {
+                method: $method,
+                endpoint: $endpoint,
+                id_arg: $id_arg,
+                body_required: $body_required,
+            }
+        )
+    };
+}
 
 #[derive(Clone)]
 struct UnifiMcp {
@@ -250,6 +270,12 @@ enum ToolKind {
     IntegrationObject {
         endpoint: &'static str,
     },
+    IntegrationWrite {
+        method: IntegrationMethod,
+        endpoint: &'static str,
+        id_arg: Option<&'static str>,
+        body_required: bool,
+    },
     Action {
         endpoint: &'static str,
         command: &'static str,
@@ -257,6 +283,14 @@ enum ToolKind {
         destructive: bool,
         idempotent: bool,
     },
+}
+
+#[derive(Clone, Copy)]
+enum IntegrationMethod {
+    Post,
+    Put,
+    Patch,
+    Delete,
 }
 
 #[derive(Clone, Copy)]
@@ -944,6 +978,195 @@ const TOOLS: &[ToolSpec] = &[
         "v1/countries",
         "countries"
     ),
+    integration_write!(
+        "unifi_create_network",
+        "Create Network",
+        "networks",
+        IntegrationMethod::Post,
+        "networks",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_update_network",
+        "Update Network",
+        "networks",
+        IntegrationMethod::Put,
+        "networks/{id}",
+        Some("network_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_delete_network",
+        "Delete Network",
+        "networks",
+        IntegrationMethod::Delete,
+        "networks/{id}",
+        Some("network_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_create_wifi_broadcast",
+        "Create Wi-Fi Broadcast",
+        "wireless",
+        IntegrationMethod::Post,
+        "wifi/broadcasts",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_update_wifi_broadcast",
+        "Update Wi-Fi Broadcast",
+        "wireless",
+        IntegrationMethod::Put,
+        "wifi/broadcasts/{id}",
+        Some("wifi_broadcast_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_delete_wifi_broadcast",
+        "Delete Wi-Fi Broadcast",
+        "wireless",
+        IntegrationMethod::Delete,
+        "wifi/broadcasts/{id}",
+        Some("wifi_broadcast_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_generate_vouchers",
+        "Generate Hotspot Vouchers",
+        "hotspot",
+        IntegrationMethod::Post,
+        "hotspot/vouchers",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_delete_voucher",
+        "Delete Hotspot Voucher",
+        "hotspot",
+        IntegrationMethod::Delete,
+        "hotspot/vouchers/{id}",
+        Some("voucher_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_create_firewall_zone",
+        "Create Firewall Zone",
+        "firewall",
+        IntegrationMethod::Post,
+        "firewall/zones",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_update_firewall_zone",
+        "Update Firewall Zone",
+        "firewall",
+        IntegrationMethod::Put,
+        "firewall/zones/{id}",
+        Some("firewall_zone_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_delete_firewall_zone",
+        "Delete Firewall Zone",
+        "firewall",
+        IntegrationMethod::Delete,
+        "firewall/zones/{id}",
+        Some("firewall_zone_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_create_firewall_policy",
+        "Create Firewall Policy",
+        "firewall",
+        IntegrationMethod::Post,
+        "firewall/policies",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_update_firewall_policy",
+        "Update Firewall Policy",
+        "firewall",
+        IntegrationMethod::Put,
+        "firewall/policies/{id}",
+        Some("firewall_policy_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_delete_firewall_policy",
+        "Delete Firewall Policy",
+        "firewall",
+        IntegrationMethod::Delete,
+        "firewall/policies/{id}",
+        Some("firewall_policy_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_patch_firewall_policy",
+        "Patch Firewall Policy",
+        "firewall",
+        IntegrationMethod::Patch,
+        "firewall/policies/{id}",
+        Some("firewall_policy_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_create_acl_rule",
+        "Create ACL Rule",
+        "acl",
+        IntegrationMethod::Post,
+        "acl-rules",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_update_acl_rule",
+        "Update ACL Rule",
+        "acl",
+        IntegrationMethod::Put,
+        "acl-rules/{id}",
+        Some("acl_rule_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_delete_acl_rule",
+        "Delete ACL Rule",
+        "acl",
+        IntegrationMethod::Delete,
+        "acl-rules/{id}",
+        Some("acl_rule_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_create_traffic_matching_list",
+        "Create Traffic Matching List",
+        "firewall",
+        IntegrationMethod::Post,
+        "traffic-matching-lists",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_update_traffic_matching_list",
+        "Update Traffic Matching List",
+        "firewall",
+        IntegrationMethod::Put,
+        "traffic-matching-lists/{id}",
+        Some("traffic_matching_list_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_delete_traffic_matching_list",
+        "Delete Traffic Matching List",
+        "firewall",
+        IntegrationMethod::Delete,
+        "traffic-matching-lists/{id}",
+        Some("traffic_matching_list_id"),
+        false
+    ),
     action!(
         "unifi_block_client",
         "Block Client",
@@ -1050,9 +1273,12 @@ impl UnifiMcp {
                         .context("each batch call must be an object")?;
                     let name = required_string(object, "name")?;
                     let inner = object_arg(object, "arguments")?;
-                    if Self::find_tool(name)
-                        .is_some_and(|tool| matches!(tool.kind, ToolKind::Action { .. }))
-                    {
+                    if Self::find_tool(name).is_some_and(|tool| {
+                        matches!(
+                            tool.kind,
+                            ToolKind::Action { .. } | ToolKind::IntegrationWrite { .. }
+                        )
+                    }) {
                         results.push(json!({"name": name, "result": error_envelope("unifi_batch accepts read-only tools only")}));
                         continue;
                     }
@@ -1113,6 +1339,15 @@ impl UnifiMcp {
             ToolKind::IntegrationObject { endpoint } => {
                 self.unifi
                     .integration_global_request(Method::GET, endpoint, 1)
+                    .await
+            }
+            ToolKind::IntegrationWrite {
+                method,
+                endpoint,
+                id_arg,
+                body_required,
+            } => {
+                self.integration_write(method, endpoint, id_arg, body_required, &args)
                     .await
             }
             ToolKind::Action {
@@ -1274,6 +1509,60 @@ impl UnifiMcp {
                 })
             })
             .with_context(|| format!("No resource matched {id_arg} '{identifier}'"))
+    }
+
+    async fn integration_write(
+        &self,
+        method: IntegrationMethod,
+        endpoint_template: &str,
+        id_arg: Option<&str>,
+        body_required: bool,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let mut endpoint = endpoint_template.to_owned();
+        let identifier = if let Some(key) = id_arg {
+            let value = required_string(args, key)?;
+            endpoint = endpoint.replace("{id}", value);
+            Some(value.to_owned())
+        } else {
+            None
+        };
+        let body = args.get("body").cloned();
+        if body_required && body.as_ref().and_then(Value::as_object).is_none() {
+            bail!("body must be an object for this Integration API operation");
+        }
+        let method_name = match method {
+            IntegrationMethod::Post => "POST",
+            IntegrationMethod::Put => "PUT",
+            IntegrationMethod::Patch => "PATCH",
+            IntegrationMethod::Delete => "DELETE",
+        };
+        let preview = json!({
+            "method": method_name,
+            "endpoint": endpoint,
+            "target": identifier,
+            "body": body,
+            "destructive": true,
+            "requires_confirmation": true,
+        });
+        if !args
+            .get("confirm")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(json!({"preview":preview,"requires_confirmation":true}));
+        }
+        let request_method = match method {
+            IntegrationMethod::Post => Method::POST,
+            IntegrationMethod::Put => Method::PUT,
+            IntegrationMethod::Patch => Method::PATCH,
+            IntegrationMethod::Delete => Method::DELETE,
+        };
+        let data = self
+            .unifi
+            .integration_request(request_method, &endpoint, body)
+            .await?;
+        Ok(json!({"preview":preview,"confirmed":true,"data":data}))
     }
 
     async fn lookup_ip(&self, args: &Map<String, Value>) -> Result<Value> {
@@ -1847,6 +2136,27 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             &[],
         ),
         ToolKind::IntegrationObject { .. } => schema(json!({}), &[]),
+        ToolKind::IntegrationWrite {
+            id_arg,
+            body_required,
+            ..
+        } => {
+            let mut properties = json!({
+                "body": {"type":"object","description":"Request body matching the official UniFi Network API schema."},
+                "confirm": {"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."}
+            });
+            if let Some(id_arg) = id_arg {
+                properties[id_arg] = json!({"type":"string"});
+            }
+            let mut required = Vec::new();
+            if let Some(id_arg) = id_arg {
+                required.push(id_arg);
+            }
+            if body_required {
+                required.push("body");
+            }
+            schema(properties, &required)
+        }
         ToolKind::V2Detail { id_arg, .. } => schema(json!({id_arg:{"type":"string"}}), &[id_arg]),
         ToolKind::Dashboard => schema(json!({}), &[]),
         ToolKind::Action { id_arg, .. } => schema(
@@ -1862,16 +2172,20 @@ fn tool_model(spec: &ToolSpec) -> Tool {
     .with_title(spec.title)
     .with_annotations(
         ToolAnnotations::with_title(spec.title)
-            .read_only(!matches!(spec.kind, ToolKind::Action { .. }))
+            .read_only(!matches!(
+                spec.kind,
+                ToolKind::Action { .. } | ToolKind::IntegrationWrite { .. }
+            ))
             .destructive(matches!(
                 spec.kind,
                 ToolKind::Action {
                     destructive: true,
                     ..
-                }
+                } | ToolKind::IntegrationWrite { .. }
             ))
             .idempotent(match spec.kind {
                 ToolKind::Action { idempotent, .. } => idempotent,
+                ToolKind::IntegrationWrite { .. } => false,
                 _ => true,
             })
             .open_world(false),
@@ -2326,7 +2640,10 @@ mod tests {
         for tool in TOOLS {
             let model = tool_model(tool);
             let annotations = model.annotations.unwrap();
-            let mutating = matches!(tool.kind, ToolKind::Action { .. });
+            let mutating = matches!(
+                tool.kind,
+                ToolKind::Action { .. } | ToolKind::IntegrationWrite { .. }
+            );
             assert_eq!(annotations.read_only_hint, Some(!mutating));
             if let ToolKind::Action {
                 destructive,
@@ -2336,6 +2653,9 @@ mod tests {
             {
                 assert_eq!(annotations.destructive_hint, Some(destructive));
                 assert_eq!(annotations.idempotent_hint, Some(idempotent));
+            } else if matches!(tool.kind, ToolKind::IntegrationWrite { .. }) {
+                assert_eq!(annotations.destructive_hint, Some(true));
+                assert_eq!(annotations.idempotent_hint, Some(false));
             }
         }
     }

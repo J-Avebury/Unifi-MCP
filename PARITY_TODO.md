@@ -18,6 +18,11 @@ contract.
 until the documented Network API 10.6.101 endpoint families are covered and the
 Network definition of done below passes.
 
+**Validation mode: implementation first.** Live-controller smoke tests are
+paused at the user's request until the Network implementation batches are built
+out. During this phase, use formatting, compilation, Clippy, unit tests, and
+static contract checks only; perform the complete live test pass afterwards.
+
 ## Official API 10.6.101 baseline
 
 The documented Network surface supplied for this controller comprises these
@@ -45,10 +50,10 @@ tested.
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
 | Official Network API 10.6.101 | To be enumerated from local OpenAPI | Path coverage in progress | Not yet comparable by name | **Primary target** |
-| Secondary upstream Network names | 194 | 90 | 77/194 (39.7%) | Compatibility view |
+| Secondary upstream Network names | 194 | 119 | 89/194 (45.9%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 293 | 90 | 77/293 (26.3%) | Compatibility view |
+| Secondary upstream total names | 293 | 119 | 89/293 (30.4%) | Compatibility view |
 
 `unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
 additional catalogue entry that does not count toward exact upstream-name
@@ -84,6 +89,9 @@ parity.
   VPN servers, RADIUS profiles, device tags, and countries.
 - [x] Official API 10.6.101 batch 4: application information, verified live
   against the controller-reported version `10.6.101`.
+- [x] Official API write contract: preview/confirmation boundary for documented
+  Network mutations, with network, Wi-Fi, voucher, firewall, ACL, and traffic
+  matching-list operations wired to the Integration API request path.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 
