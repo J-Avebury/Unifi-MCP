@@ -149,6 +149,20 @@ macro_rules! v2_detail {
         )
     };
 }
+macro_rules! integration_list {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr, $key:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!("Read ", $title, " from the UniFi Network Integration API."),
+            ToolKind::IntegrationList {
+                endpoint: $endpoint,
+                output_key: $key,
+            }
+        )
+    };
+}
 
 #[derive(Clone)]
 struct UnifiMcp {
@@ -215,6 +229,10 @@ enum ToolKind {
     V2Detail {
         endpoint: &'static str,
         id_arg: &'static str,
+    },
+    IntegrationList {
+        endpoint: &'static str,
+        output_key: &'static str,
     },
     Action {
         endpoint: &'static str,
@@ -757,6 +775,20 @@ const TOOLS: &[ToolSpec] = &[
         "trafficroutes",
         "traffic_route_id"
     ),
+    integration_list!(
+        "unifi_list_dpi_applications",
+        "DPI Applications",
+        "security",
+        "v1/dpi/applications",
+        "dpi_applications"
+    ),
+    integration_list!(
+        "unifi_list_dpi_categories",
+        "DPI Categories",
+        "security",
+        "v1/dpi/categories",
+        "dpi_categories"
+    ),
     action!(
         "unifi_block_client",
         "Block Client",
@@ -919,6 +951,10 @@ impl UnifiMcp {
             ToolKind::V2Detail { endpoint, id_arg } => {
                 self.v2_detail(endpoint, id_arg, &args).await
             }
+            ToolKind::IntegrationList {
+                endpoint,
+                output_key,
+            } => self.integration_list(endpoint, output_key, &args).await,
             ToolKind::Action {
                 endpoint,
                 command,
@@ -1225,6 +1261,41 @@ impl UnifiMcp {
             .await
     }
 
+    async fn integration_list(
+        &self,
+        endpoint: &str,
+        output_key: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let limit = bounded_limit(
+            args.get("limit")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize),
+        );
+        let payload = self
+            .unifi
+            .integration_global_request(Method::GET, endpoint, limit)
+            .await?;
+        let reported_total = payload
+            .get("totalCount")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize);
+        let mut rows = extract_rows_owned(payload);
+        let query = optional_string(args, "query")
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        if let Some(query) = query {
+            rows.retain(|row| value_contains(row, query));
+        }
+        let total_count = if query.is_some() {
+            rows.len()
+        } else {
+            reported_total.unwrap_or(rows.len())
+        };
+        rows.truncate(limit);
+        Ok(json!({"total_count":total_count,"returned_count":rows.len(),output_key:rows}))
+    }
+
     async fn action(
         &self,
         endpoint: &str,
@@ -1463,6 +1534,43 @@ impl UnifiClient {
         }
         Ok(value)
     }
+    async fn integration_global_request(
+        &self,
+        method: Method,
+        endpoint: &str,
+        limit: usize,
+    ) -> Result<Value> {
+        let api_key = self.api_key.as_deref().context(
+            "The UniFi Network Integration API requires UNIFI_NETWORK_API_KEY or UNIFI_API_KEY",
+        )?;
+        let mut url = self.proxy_url_path(&format!(
+            "network/integration/{}",
+            endpoint.trim().trim_start_matches('/')
+        ))?;
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string())
+            .append_pair("offset", "0");
+        let response = self
+            .client
+            .request(method, url)
+            .header("Accept", "application/json")
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("UniFi Network Integration API request failed")?;
+        let status = response.status();
+        let text = response.text().await?;
+        if status == StatusCode::NOT_FOUND {
+            bail!(
+                "Integration API endpoint '{endpoint}' is not supported by this controller version or enabled feature set"
+            );
+        }
+        let mut value = parse_json_response(status, text)?;
+        if self.redact_sensitive_fields {
+            redact_sensitive(&mut value);
+        }
+        Ok(value)
+    }
     async fn integration_site(&self) -> Result<String> {
         let mut cached = self.integration_site_id.lock().await;
         if let Some(site_id) = cached.as_ref() {
@@ -1549,7 +1657,7 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"},"summary":{"type":"boolean","description":"Return compact records. Defaults to true; set false only when the full selected controller record is required."}}),
             &[],
         ),
-        ToolKind::V2List { .. } => schema(
+        ToolKind::V2List { .. } | ToolKind::IntegrationList { .. } => schema(
             json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"}}),
             &[],
         ),

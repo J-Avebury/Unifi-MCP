@@ -12,10 +12,10 @@ done below passes.
 
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
-| Network | 194 | 76 | 75/194 (38.7%) | In progress |
+| Network | 194 | 78 | 77/194 (39.7%) | In progress |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Total | 293 | 76 | 75/293 (25.6%) | Not at parity |
+| Total | 293 | 78 | 77/293 (26.3%) | Not at parity |
 
 `unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
 additional catalogue entry that does not count toward exact upstream-name
@@ -41,6 +41,7 @@ parity.
 - [x] Legacy inventory/detail tools: Dynamic DNS, hotspot vouchers, and VPN
   clients/servers (strictly filtered from the shared network configuration
   collection by purpose).
+- [x] API-key Integration catalogue reads for DPI applications and categories.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 
