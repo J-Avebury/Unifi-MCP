@@ -291,6 +291,8 @@ enum ToolKind {
     },
     LookupIp,
     Raw,
+    ClientRecord,
+    ClientBandwidth,
     V2List {
         endpoint: &'static str,
         output_key: &'static str,
@@ -749,6 +751,20 @@ const TOOLS: &[ToolSpec] = &[
         "statistics",
         "stat/sta",
         "statistics"
+    ),
+    spec!(
+        "unifi_get_client_record",
+        "Client Record",
+        "statistics",
+        "Return the stored lifetime record for one client, addressed by MAC address.",
+        ToolKind::ClientRecord
+    ),
+    spec!(
+        "unifi_get_client_bandwidth",
+        "Client Bandwidth History",
+        "statistics",
+        "Return historical client bandwidth samples for a 5-minute, hourly, or daily interval.",
+        ToolKind::ClientBandwidth
     ),
     list!(
         "unifi_get_client_sessions",
@@ -1804,6 +1820,8 @@ impl UnifiMcp {
             }
             ToolKind::LookupIp => self.lookup_ip(&args).await,
             ToolKind::Raw => self.raw(&args).await,
+            ToolKind::ClientRecord => self.client_record(&args).await,
+            ToolKind::ClientBandwidth => self.client_bandwidth(&args).await,
             ToolKind::V2List {
                 endpoint,
                 output_key,
@@ -1962,6 +1980,61 @@ impl UnifiMcp {
         Ok(
             json!({"site":self.unifi.site,"total_count":total_count,"returned_count":rows.len(),output_key:rows}),
         )
+    }
+
+    async fn client_record(&self, args: &Map<String, Value>) -> Result<Value> {
+        let mac = required_mac(args, "mac")?;
+        let endpoint = format!("stat/user/{mac}");
+        let payload = self
+            .unifi
+            .network_request(Method::GET, &endpoint, None)
+            .await?;
+        Ok(json!({"site": self.unifi.site, "mac": mac, "record": payload}))
+    }
+
+    async fn client_bandwidth(&self, args: &Map<String, Value>) -> Result<Value> {
+        let mac = required_mac(args, "mac")?;
+        let interval = optional_string(args, "interval").unwrap_or("5minutes");
+        if !matches!(interval, "5minutes" | "hourly" | "daily") {
+            bail!("interval must be one of: 5minutes, hourly, daily");
+        }
+        let end = args
+            .get("end")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(current_unix_seconds);
+        let start = args
+            .get("start")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| end.saturating_sub(7 * 24 * 60 * 60));
+        if start >= end {
+            bail!("start must be earlier than end");
+        }
+        let attrs = match args.get("attrs") {
+            None | Some(Value::Null) => json!(["bytes-rx", "bytes-tx"]),
+            Some(Value::Array(values))
+                if !values.is_empty() && values.iter().all(Value::is_string) =>
+            {
+                Value::Array(values.clone())
+            }
+            Some(_) => bail!("attrs must be a non-empty array of strings"),
+        };
+        let endpoint = format!("stat/report/{interval}.user");
+        let payload = self
+            .unifi
+            .network_request(
+                Method::POST,
+                &endpoint,
+                Some(json!({"attrs": attrs, "mac": mac, "start": start, "end": end})),
+            )
+            .await?;
+        Ok(json!({
+            "site": self.unifi.site,
+            "mac": mac,
+            "interval": interval,
+            "start": start,
+            "end": end,
+            "report": payload
+        }))
     }
 
     async fn detail(
@@ -2743,6 +2816,20 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             schema(json!({id_arg:{"type":"string"}}), &[id_arg])
         }
         ToolKind::LookupIp => schema(json!({"ip_address":{"type":"string"}}), &["ip_address"]),
+        ToolKind::ClientRecord => schema(
+            json!({"mac":{"type":"string","description":"Client MAC address."}}),
+            &["mac"],
+        ),
+        ToolKind::ClientBandwidth => schema(
+            json!({
+                "mac":{"type":"string","description":"Client MAC address."},
+                "interval":{"type":"string","enum":["5minutes","hourly","daily"],"default":"5minutes"},
+                "start":{"type":"integer","minimum":0,"description":"Unix timestamp; defaults to seven days before end."},
+                "end":{"type":"integer","minimum":1,"description":"Unix timestamp; defaults to now."},
+                "attrs":{"type":"array","items":{"type":"string"},"description":"Optional controller report attributes; defaults to bytes-rx and bytes-tx."}
+            }),
+            &["mac"],
+        ),
         ToolKind::Raw => schema(
             json!({"endpoint":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":500}}),
             &["endpoint"],
@@ -2855,6 +2942,26 @@ fn required_string<'a>(args: &'a Map<String, Value>, key: &str) -> Result<&'a st
         .and_then(Value::as_str)
         .filter(|v| !v.trim().is_empty())
         .with_context(|| format!("{key} must be a non-empty string"))
+}
+fn required_mac<'a>(args: &'a Map<String, Value>, key: &str) -> Result<&'a str> {
+    let mac = required_string(args, key)?;
+    let valid = mac.len() == 17
+        && mac.chars().enumerate().all(|(index, ch)| {
+            if index % 3 == 2 {
+                ch == ':'
+            } else {
+                ch.is_ascii_hexdigit()
+            }
+        });
+    if !valid {
+        bail!("{key} must be a colon-separated MAC address");
+    }
+    Ok(mac)
+}
+fn current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 fn optional_string<'a>(args: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     args.get(key).and_then(Value::as_str)
@@ -3278,6 +3385,25 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), total);
+    }
+    #[test]
+    fn client_history_tools_are_catalogued() {
+        for name in ["unifi_get_client_record", "unifi_get_client_bandwidth"] {
+            let spec = UnifiMcp::find_tool(name).expect("catalogued client history tool");
+            assert!(spec.description.contains("client"));
+            assert_eq!(
+                tool_model(spec).annotations.unwrap().read_only_hint,
+                Some(true)
+            );
+        }
+    }
+    #[test]
+    fn client_mac_validation_rejects_path_injection() {
+        let mut args = Map::new();
+        args.insert("mac".into(), json!("../../rest/networkconf"));
+        assert!(required_mac(&args, "mac").is_err());
+        args.insert("mac".into(), json!("c0:d7:aa:b5:2a:06"));
+        assert_eq!(required_mac(&args, "mac").unwrap(), "c0:d7:aa:b5:2a:06");
     }
     #[test]
     fn catalog_annotations_match_mutability() {
