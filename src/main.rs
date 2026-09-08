@@ -148,6 +148,25 @@ macro_rules! v2_detail {
         )
     };
 }
+macro_rules! v2_nested_detail {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr, $arg:expr, $suffix:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!(
+                "Return ",
+                $title,
+                " from the UniFi Network Integration API."
+            ),
+            ToolKind::V2NestedDetail {
+                endpoint: $endpoint,
+                id_arg: $arg,
+                suffix: $suffix,
+            }
+        )
+    };
+}
 macro_rules! integration_list {
     ($name:expr, $title:expr, $category:expr, $endpoint:expr, $key:expr) => {
         spec!(
@@ -170,6 +189,19 @@ macro_rules! integration_object {
             $category,
             concat!("Read ", $title, " from the UniFi Network Integration API."),
             ToolKind::IntegrationObject {
+                endpoint: $endpoint
+            }
+        )
+    };
+}
+macro_rules! integration_query {
+    ($name:expr, $title:expr, $category:expr, $endpoint:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!("Read ", $title, " from the UniFi Network Integration API."),
+            ToolKind::IntegrationQuery {
                 endpoint: $endpoint
             }
         )
@@ -262,11 +294,19 @@ enum ToolKind {
         endpoint: &'static str,
         id_arg: &'static str,
     },
+    V2NestedDetail {
+        endpoint: &'static str,
+        id_arg: &'static str,
+        suffix: &'static str,
+    },
     IntegrationList {
         endpoint: &'static str,
         output_key: &'static str,
     },
     IntegrationObject {
+        endpoint: &'static str,
+    },
+    IntegrationQuery {
         endpoint: &'static str,
     },
     IntegrationWrite {
@@ -838,6 +878,14 @@ const TOOLS: &[ToolSpec] = &[
         "devices",
         "device_id"
     ),
+    v2_nested_detail!(
+        "unifi_get_adopted_device_statistics",
+        "Official Adopted Device Statistics",
+        "devices",
+        "devices",
+        "device_id",
+        "statistics/latest"
+    ),
     v2_list!(
         "unifi_list_api_clients",
         "Official Connected Clients",
@@ -880,6 +928,14 @@ const TOOLS: &[ToolSpec] = &[
         "wifi/broadcasts",
         "wifi_broadcast_id"
     ),
+    v2_nested_detail!(
+        "unifi_get_api_network_references",
+        "Official Network References",
+        "networks",
+        "networks",
+        "network_id",
+        "references"
+    ),
     integration_list!(
         "unifi_list_dpi_applications",
         "DPI Applications",
@@ -913,6 +969,12 @@ const TOOLS: &[ToolSpec] = &[
         "Official Network Application Info",
         "system",
         "v1/info"
+    ),
+    integration_query!(
+        "unifi_get_api_firewall_policy_ordering",
+        "Official Firewall Policy Ordering",
+        "firewall",
+        "firewall/policies/ordering"
     ),
     v2_list!(
         "unifi_list_api_vouchers",
@@ -1201,6 +1263,15 @@ const TOOLS: &[ToolSpec] = &[
         true
     ),
     integration_write!(
+        "unifi_execute_api_port_action",
+        "Execute Device Port Action",
+        "switch",
+        IntegrationMethod::Post,
+        "devices/{id}/interfaces/ports/{port}/actions",
+        Some("device_id"),
+        true
+    ),
+    integration_write!(
         "unifi_execute_api_client_action",
         "Execute Client Action",
         "clients",
@@ -1374,6 +1445,11 @@ impl UnifiMcp {
             ToolKind::V2Detail { endpoint, id_arg } => {
                 self.v2_detail(endpoint, id_arg, &args).await
             }
+            ToolKind::V2NestedDetail {
+                endpoint,
+                id_arg,
+                suffix,
+            } => self.v2_nested_detail(endpoint, id_arg, suffix, &args).await,
             ToolKind::IntegrationList {
                 endpoint,
                 output_key,
@@ -1382,6 +1458,9 @@ impl UnifiMcp {
                 self.unifi
                     .integration_global_request(Method::GET, endpoint, 1)
                     .await
+            }
+            ToolKind::IntegrationQuery { endpoint } => {
+                self.integration_query(endpoint, &args).await
             }
             ToolKind::IntegrationWrite {
                 method,
@@ -1569,6 +1648,13 @@ impl UnifiMcp {
         } else {
             None
         };
+        if endpoint.contains("{port}") {
+            let port = args
+                .get("port_index")
+                .and_then(Value::as_u64)
+                .context("port_index must be an integer")?;
+            endpoint = endpoint.replace("{port}", &port.to_string());
+        }
         let body = args.get("body").cloned();
         if body_required && body.as_ref().and_then(Value::as_object).is_none() {
             bail!("body must be an object for this Integration API operation");
@@ -1584,6 +1670,7 @@ impl UnifiMcp {
             "endpoint": endpoint,
             "target": identifier,
             "body": body,
+            "query": args.get("query"),
             "destructive": true,
             "requires_confirmation": true,
         });
@@ -1600,9 +1687,23 @@ impl UnifiMcp {
             IntegrationMethod::Patch => Method::PATCH,
             IntegrationMethod::Delete => Method::DELETE,
         };
+        let query = args
+            .get("query")
+            .and_then(Value::as_object)
+            .map(|query| {
+                query
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let query = query
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone()))
+            .collect::<Vec<_>>();
         let data = self
             .unifi
-            .integration_request(request_method, &endpoint, body)
+            .integration_request_with_query(request_method, &endpoint, body, &query)
             .await?;
         Ok(json!({"preview":preview,"confirmed":true,"data":data}))
     }
@@ -1758,6 +1859,48 @@ impl UnifiMcp {
         let identifier = required_string(args, id_arg)?;
         self.unifi
             .integration_request(Method::GET, &format!("{endpoint}/{identifier}"), None)
+            .await
+    }
+
+    async fn v2_nested_detail(
+        &self,
+        endpoint: &str,
+        id_arg: &str,
+        suffix: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let identifier = required_string(args, id_arg)?;
+        self.unifi
+            .integration_request(
+                Method::GET,
+                &format!("{endpoint}/{identifier}/{suffix}"),
+                None,
+            )
+            .await
+    }
+
+    async fn integration_query(&self, endpoint: &str, args: &Map<String, Value>) -> Result<Value> {
+        let query = args
+            .get("query")
+            .and_then(Value::as_object)
+            .context("query must be an object")?;
+        let pairs = query
+            .iter()
+            .map(|(key, value)| {
+                let value = value
+                    .as_str()
+                    .map(ToOwned::to_owned)
+                    .or_else(|| Some(value.to_string()))
+                    .unwrap_or_default();
+                (key.clone(), value)
+            })
+            .collect::<Vec<_>>();
+        let pairs = pairs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone()))
+            .collect::<Vec<_>>();
+        self.unifi
+            .integration_request_with_query(Method::GET, endpoint, None, &pairs)
             .await
     }
 
@@ -2178,14 +2321,21 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             &[],
         ),
         ToolKind::IntegrationObject { .. } => schema(json!({}), &[]),
+        ToolKind::IntegrationQuery { .. } => schema(
+            json!({"query":{"type":"object","description":"Query parameters required by the official endpoint."}}),
+            &["query"],
+        ),
         ToolKind::IntegrationWrite {
             id_arg,
+            endpoint,
             body_required,
             ..
         } => {
             let mut properties = json!({
                 "body": {"type":"object","description":"Request body matching the official UniFi Network API schema."},
-                "confirm": {"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."}
+                "confirm": {"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."},
+                "query": {"type":"object","description":"Optional query parameters required by the official endpoint."},
+                "port_index": {"type":"integer","minimum":0}
             });
             if let Some(id_arg) = id_arg {
                 properties[id_arg] = json!({"type":"string"});
@@ -2197,9 +2347,14 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             if body_required {
                 required.push("body");
             }
+            if endpoint.contains("{port}") {
+                required.push("port_index");
+            }
             schema(properties, &required)
         }
-        ToolKind::V2Detail { id_arg, .. } => schema(json!({id_arg:{"type":"string"}}), &[id_arg]),
+        ToolKind::V2Detail { id_arg, .. } | ToolKind::V2NestedDetail { id_arg, .. } => {
+            schema(json!({id_arg:{"type":"string"}}), &[id_arg])
+        }
         ToolKind::Dashboard => schema(json!({}), &[]),
         ToolKind::Action { id_arg, .. } => schema(
             json!({id_arg:{"type":"string"},"confirm":{"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."}}),
