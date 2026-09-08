@@ -1020,6 +1020,62 @@ const TOOLS: &[ToolSpec] = &[
         "traffic_route_id"
     ),
     v2_list!(
+        "unifi_list_switch_stacks",
+        "Switch Stacks",
+        "switch",
+        "switching/switch-stacks",
+        "switch_stacks"
+    ),
+    v2_detail!(
+        "unifi_get_switch_stack_details",
+        "Switch Stack Details",
+        "switch",
+        "switching/switch-stacks",
+        "switch_stack_id"
+    ),
+    v2_list!(
+        "unifi_list_mc_lag_domains",
+        "MC-LAG Domains",
+        "switch",
+        "switching/mc-lag-domains",
+        "mc_lag_domains"
+    ),
+    v2_detail!(
+        "unifi_get_mc_lag_domain_details",
+        "MC-LAG Domain Details",
+        "switch",
+        "switching/mc-lag-domains",
+        "mc_lag_domain_id"
+    ),
+    v2_list!(
+        "unifi_list_lags",
+        "Link Aggregation Groups",
+        "switch",
+        "switching/lags",
+        "lags"
+    ),
+    v2_detail!(
+        "unifi_get_lag_details",
+        "Link Aggregation Group Details",
+        "switch",
+        "switching/lags",
+        "lag_id"
+    ),
+    v2_list!(
+        "unifi_list_dns_policies",
+        "DNS Policies",
+        "dns",
+        "dns/policies",
+        "dns_policies"
+    ),
+    v2_detail!(
+        "unifi_get_dns_policy_details",
+        "DNS Policy Details",
+        "dns",
+        "dns/policies",
+        "dns_policy_id"
+    ),
+    v2_list!(
         "unifi_list_adopted_devices",
         "Official Adopted Devices",
         "devices",
@@ -1232,6 +1288,33 @@ const TOOLS: &[ToolSpec] = &[
         IntegrationMethod::Delete,
         "networks/{id}",
         Some("network_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_create_dns_policy",
+        "Create DNS Policy",
+        "dns",
+        IntegrationMethod::Post,
+        "dns/policies",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_update_dns_policy",
+        "Update DNS Policy",
+        "dns",
+        IntegrationMethod::Put,
+        "dns/policies/{id}",
+        Some("dns_policy_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_delete_dns_policy",
+        "Delete DNS Policy",
+        "dns",
+        IntegrationMethod::Delete,
+        "dns/policies/{id}",
+        Some("dns_policy_id"),
         false
     ),
     integration_write!(

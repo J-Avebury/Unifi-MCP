@@ -49,11 +49,11 @@ tested.
 
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
-| Official Network API 10.6.101 | To be enumerated from local OpenAPI | Path coverage in progress | Not yet comparable by name | **Primary target** |
-| Secondary upstream Network names | 194 | 164 | 122/194 (62.9%) | Compatibility view |
+| Official Network API 10.6.101 | 73 documented operations | 73 catalogue operations | Path/method coverage implemented | **Primary target** |
+| Secondary upstream Network names | 194 | 175 | 122/194 (62.9%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 293 | 164 | 122/293 (41.6%) | Compatibility view |
+| Secondary upstream total names | 293 | 175 | 122/293 (41.6%) | Compatibility view |
 
 `unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
 additional catalogue entry that does not count toward exact upstream-name
@@ -106,6 +106,9 @@ parity.
 - [x] Network compatibility action/WLAN aliases: adopt, force provision, port
   power-cycle, guest authorise/de-authorise, voucher revoke, and WLAN
   create/update/delete names map to documented Integration API operations.
+- [x] Official Switching and DNS batches: switch stacks, MC-LAG domains, LAGs,
+  and DNS policy list/detail/create/update/delete routes use the documented
+  Integration API paths.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 
