@@ -10,7 +10,12 @@ use rmcp::{
     transport::stdio,
 };
 use serde_json::{Map, Value, json};
-use std::{borrow::Cow, env, fs, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    env, fs,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::sync::Mutex;
 
 const DEFAULT_SITE: &str = "default";
@@ -1879,15 +1884,28 @@ impl UnifiMcp {
                 .and_then(Value::as_u64)
                 .map(|v| v as usize),
         );
-        // Some legacy controller endpoints, notably `stat/session`, reject
-        // the otherwise common `_limit` parameter. Keep the MCP-side bound
-        // while allowing those endpoints to use their controller default.
-        let request_limit = (endpoint != "stat/session").then(|| json!({"_limit":MAX_LIMIT}));
-        let mut rows = extract_rows_owned(
+        let payload = if endpoint == "stat/session" {
+            let end = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock is before Unix epoch")?
+                .as_secs();
             self.unifi
-                .network_request(Method::GET, endpoint, request_limit)
-                .await?,
-        );
+                .network_request(
+                    Method::POST,
+                    endpoint,
+                    Some(json!({
+                        "type": "all",
+                        "start": end.saturating_sub(7 * 24 * 60 * 60),
+                        "end": end
+                    })),
+                )
+                .await?
+        } else {
+            self.unifi
+                .network_request(Method::GET, endpoint, Some(json!({"_limit":MAX_LIMIT})))
+                .await?
+        };
+        let mut rows = extract_rows_owned(payload);
         if output_key == "blocked_clients" {
             rows.retain(|row| row.get("blocked").and_then(Value::as_bool).unwrap_or(false));
         }
