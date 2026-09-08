@@ -50,10 +50,10 @@ tested.
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
 | Official Network API 10.6.101 | To be enumerated from local OpenAPI | Path coverage in progress | Not yet comparable by name | **Primary target** |
-| Secondary upstream Network names | 194 | 119 | 89/194 (45.9%) | Compatibility view |
+| Secondary upstream Network names | 194 | 124 | 89/194 (45.9%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 293 | 119 | 89/293 (30.4%) | Compatibility view |
+| Secondary upstream total names | 293 | 124 | 89/293 (30.4%) | Compatibility view |
 
 `unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
 additional catalogue entry that does not count toward exact upstream-name
@@ -92,6 +92,9 @@ parity.
 - [x] Official API write contract: preview/confirmation boundary for documented
   Network mutations, with network, Wi-Fi, voucher, firewall, ACL, and traffic
   matching-list operations wired to the Integration API request path.
+- [x] Official API device/client action batch: adoption/removal, adopted-device
+  actions, connected-client actions, and pending-device inventory wired through
+  the same confirmed Integration API boundary.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 

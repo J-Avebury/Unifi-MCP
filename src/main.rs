@@ -902,6 +902,13 @@ const TOOLS: &[ToolSpec] = &[
         "v1/sites",
         "sites"
     ),
+    integration_list!(
+        "unifi_list_pending_api_devices",
+        "Official Pending Devices",
+        "devices",
+        "v1/pending-devices",
+        "pending_devices"
+    ),
     integration_object!(
         "unifi_get_api_application_info",
         "Official Network Application Info",
@@ -1166,6 +1173,42 @@ const TOOLS: &[ToolSpec] = &[
         "traffic-matching-lists/{id}",
         Some("traffic_matching_list_id"),
         false
+    ),
+    integration_write!(
+        "unifi_adopt_api_device",
+        "Adopt Device",
+        "devices",
+        IntegrationMethod::Post,
+        "devices",
+        None,
+        true
+    ),
+    integration_write!(
+        "unifi_remove_api_device",
+        "Remove Adopted Device",
+        "devices",
+        IntegrationMethod::Delete,
+        "devices/{id}",
+        Some("device_id"),
+        false
+    ),
+    integration_write!(
+        "unifi_execute_api_device_action",
+        "Execute Adopted Device Action",
+        "devices",
+        IntegrationMethod::Post,
+        "devices/{id}/actions",
+        Some("device_id"),
+        true
+    ),
+    integration_write!(
+        "unifi_execute_api_client_action",
+        "Execute Client Action",
+        "clients",
+        IntegrationMethod::Post,
+        "clients/{id}/actions",
+        Some("client_id"),
+        true
     ),
     action!(
         "unifi_block_client",
