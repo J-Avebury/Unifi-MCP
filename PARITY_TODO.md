@@ -106,6 +106,8 @@ parity.
 - [x] Official Switching and DNS batches: switch stacks, MC-LAG domains, LAGs,
   and DNS policy list/detail/create/update/delete routes use the documented
   Integration API paths.
+- [x] OpenAPI pagination contract: official list tools expose bounded `limit`
+  and `offset` inputs and preserve the selected page in their response.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 

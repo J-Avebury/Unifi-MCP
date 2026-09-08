@@ -1817,7 +1817,7 @@ impl UnifiMcp {
             } => self.integration_list(endpoint, output_key, &args).await,
             ToolKind::IntegrationObject { endpoint } => {
                 self.unifi
-                    .integration_global_request(Method::GET, endpoint, 1)
+                    .integration_global_request(Method::GET, endpoint, 1, 0)
                     .await
             }
             ToolKind::IntegrationQuery { endpoint } => {
@@ -2194,13 +2194,14 @@ impl UnifiMcp {
                 .and_then(Value::as_u64)
                 .map(|v| v as usize),
         );
+        let offset = bounded_offset(args.get("offset").and_then(Value::as_u64));
         let payload = self
             .unifi
             .integration_request_with_query(
                 Method::GET,
                 endpoint,
                 None,
-                &[("limit", limit.to_string()), ("offset", "0".to_owned())],
+                &[("limit", limit.to_string()), ("offset", offset.to_string())],
             )
             .await?;
         let reported_total = payload
@@ -2216,7 +2217,9 @@ impl UnifiMcp {
         }
         let total_count = reported_total.unwrap_or(rows.len());
         rows.truncate(limit);
-        Ok(json!({"total_count":total_count,"returned_count":rows.len(),output_key:rows}))
+        Ok(
+            json!({"offset":offset,"limit":limit,"total_count":total_count,"returned_count":rows.len(),output_key:rows}),
+        )
     }
 
     async fn v2_detail(
@@ -2284,9 +2287,10 @@ impl UnifiMcp {
                 .and_then(Value::as_u64)
                 .map(|v| v as usize),
         );
+        let offset = bounded_offset(args.get("offset").and_then(Value::as_u64));
         let payload = self
             .unifi
-            .integration_global_request(Method::GET, endpoint, limit)
+            .integration_global_request(Method::GET, endpoint, limit, offset)
             .await?;
         let reported_total = payload
             .get("totalCount")
@@ -2305,7 +2309,9 @@ impl UnifiMcp {
             reported_total.unwrap_or(rows.len())
         };
         rows.truncate(limit);
-        Ok(json!({"total_count":total_count,"returned_count":rows.len(),output_key:rows}))
+        Ok(
+            json!({"offset":offset,"limit":limit,"total_count":total_count,"returned_count":rows.len(),output_key:rows}),
+        )
     }
 
     async fn action(
@@ -2567,6 +2573,7 @@ impl UnifiClient {
         method: Method,
         endpoint: &str,
         limit: usize,
+        offset: usize,
     ) -> Result<Value> {
         let api_key = self.api_key.as_deref().context(
             "The UniFi Network Integration API requires UNIFI_NETWORK_API_KEY or UNIFI_API_KEY",
@@ -2577,7 +2584,7 @@ impl UnifiClient {
         ))?;
         url.query_pairs_mut()
             .append_pair("limit", &limit.to_string())
-            .append_pair("offset", "0");
+            .append_pair("offset", &offset.to_string());
         let response = self
             .client
             .request(method, url)
@@ -2686,7 +2693,7 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             &[],
         ),
         ToolKind::V2List { .. } | ToolKind::IntegrationList { .. } => schema(
-            json!({"limit":{"type":"integer","minimum":1,"maximum":500},"query":{"type":"string"}}),
+            json!({"limit":{"type":"integer","minimum":1,"maximum":500},"offset":{"type":"integer","minimum":0},"query":{"type":"string"}}),
             &[],
         ),
         ToolKind::IntegrationObject { .. } => schema(json!({}), &[]),
@@ -2812,6 +2819,9 @@ fn object_arg(args: &Map<String, Value>, key: &str) -> Result<Map<String, Value>
 }
 fn bounded_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
+}
+fn bounded_offset(offset: Option<u64>) -> usize {
+    offset.unwrap_or(0).min(usize::MAX as u64) as usize
 }
 fn value_contains(value: &Value, query: &str) -> bool {
     value
@@ -3159,6 +3169,8 @@ mod tests {
         assert_eq!(bounded_limit(None), 100);
         assert_eq!(bounded_limit(Some(0)), 1);
         assert_eq!(bounded_limit(Some(501)), 500);
+        assert_eq!(bounded_offset(None), 0);
+        assert_eq!(bounded_offset(Some(25)), 25);
     }
     #[test]
     fn redacts_secrets_without_redacting_flags() {
