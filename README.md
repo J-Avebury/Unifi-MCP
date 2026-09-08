@@ -9,7 +9,7 @@ the binary as a child process and talks to it over stdin/stdout.
 
 The tool names and response contract are being brought into parity with the
 Network server from [`the upstream compatibility project`](),
-implemented natively in Rust. The current release exposes 73 read-only tools
+implemented natively in Rust. The current release exposes 97 read-only tools
 covering discovery, batching, dashboards, devices, clients, WLANs, networks,
 events, alarms, routing, firewall inventory, switching, statistics, DPI, and
 system settings.
@@ -41,6 +41,11 @@ The initial mutation batch also includes client block/unblock/reconnect and
 device reboot/upgrade actions. Each returns a preview by default and performs
 no controller write until the caller repeats it with `confirm: true`. Mutations
 are refused by `unifi_batch`; they must be targeted and confirmed individually.
+
+The official Network API mutation tools use the same preview/confirmation
+boundary and accept a `body` object matching the version-specific API schema.
+Live mutation validation is deferred until the Network implementation phase is
+complete.
 
 ## Raw endpoint allowlist
 
