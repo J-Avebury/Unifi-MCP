@@ -6,11 +6,8 @@ UniFi Network API exposed by the user's Dream Machine Pro: **UniFi Network API
 authentication, UUID site IDs, documented request/response schemas, filtering,
 pagination, and HTTP error envelopes.
 
-The [`the upstream compatibility project`]() manifest at
-upstream commit `redacted` remains a secondary
-compatibility target, useful for preserving tool names and the older controller
-surface. Its 194 names must not be mistaken for the complete 10.6.101 API
-contract.
+The older compatibility-name manifest remains a secondary reference surface.
+Its 194 names must not be mistaken for the complete 10.6.101 API contract.
 
 ## Current position
 

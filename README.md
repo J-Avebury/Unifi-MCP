@@ -7,9 +7,8 @@ the binary as a child process and talks to it over stdin/stdout.
 
 ## Compatibility target
 
-The tool names and response contract are being brought into parity with the
-Network server from [`the upstream compatibility project`](),
-implemented natively in Rust. The current release exposes 128 read-only tools
+The tool names and response contract target the official local UniFi Network
+API, implemented natively in Rust. The current release exposes 128 read-only tools
 covering discovery, batching, dashboards, devices, clients, WLANs, networks,
 events, alarms, routing, firewall inventory, switching, statistics, DPI, and
 system settings.
