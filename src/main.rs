@@ -880,6 +880,48 @@ const TOOLS: &[ToolSpec] = &[
         "traffic-matching-lists",
         "traffic_matching_list_id"
     ),
+    v2_list!(
+        "unifi_list_wan_interfaces",
+        "Official WAN Interfaces",
+        "routing",
+        "wans",
+        "wan_interfaces"
+    ),
+    v2_list!(
+        "unifi_list_site_to_site_vpn_tunnels",
+        "Official Site-to-Site VPN Tunnels",
+        "vpn",
+        "vpn/site-to-site-tunnels",
+        "site_to_site_vpn_tunnels"
+    ),
+    v2_list!(
+        "unifi_list_api_vpn_servers",
+        "Official VPN Servers",
+        "vpn",
+        "vpn/servers",
+        "vpn_servers"
+    ),
+    v2_list!(
+        "unifi_list_radius_profiles",
+        "Official RADIUS Profiles",
+        "security",
+        "radius/profiles",
+        "radius_profiles"
+    ),
+    v2_list!(
+        "unifi_list_device_tags",
+        "Official Device Tags",
+        "devices",
+        "device-tags",
+        "device_tags"
+    ),
+    integration_list!(
+        "unifi_list_countries",
+        "Official Countries",
+        "system",
+        "v1/countries",
+        "countries"
+    ),
     action!(
         "unifi_block_client",
         "Block Client",
