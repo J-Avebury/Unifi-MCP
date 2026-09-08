@@ -1720,7 +1720,15 @@ impl UnifiMcp {
             .map(|query| {
                 query
                     .iter()
-                    .map(|(key, value)| (key.clone(), value.to_string()))
+                    .map(|(key, value)| {
+                        (
+                            key.clone(),
+                            value
+                                .as_str()
+                                .map(ToOwned::to_owned)
+                                .unwrap_or_else(|| value.to_string()),
+                        )
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
