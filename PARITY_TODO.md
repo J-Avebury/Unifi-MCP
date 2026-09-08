@@ -45,10 +45,10 @@ tested.
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
 | Official Network API 10.6.101 | To be enumerated from local OpenAPI | Path coverage in progress | Not yet comparable by name | **Primary target** |
-| Secondary upstream Network names | 194 | 78 | 77/194 (39.7%) | Compatibility view |
+| Secondary upstream Network names | 194 | 83 | 77/194 (39.7%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 293 | 78 | 77/293 (26.3%) | Compatibility view |
+| Secondary upstream total names | 293 | 83 | 77/293 (26.3%) | Compatibility view |
 
 `unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
 additional catalogue entry that does not count toward exact upstream-name
@@ -78,6 +78,8 @@ parity.
 - [x] Official API 10.6.101 batch 1: adopted devices, connected clients,
   networks, and Wi-Fi broadcasts (list/detail routes with documented UUID site
   routing and `totalCount` pagination).
+- [x] Official API 10.6.101 batch 2: local sites, hotspot vouchers, traffic
+  matching lists, firewall zones, and ACL inventory.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests.
 

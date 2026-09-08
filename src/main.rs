@@ -845,6 +845,41 @@ const TOOLS: &[ToolSpec] = &[
         "v1/dpi/categories",
         "dpi_categories"
     ),
+    integration_list!(
+        "unifi_list_api_sites",
+        "Official Local Sites",
+        "system",
+        "v1/sites",
+        "sites"
+    ),
+    v2_list!(
+        "unifi_list_api_vouchers",
+        "Official Hotspot Vouchers",
+        "hotspot",
+        "hotspot/vouchers",
+        "vouchers"
+    ),
+    v2_detail!(
+        "unifi_get_api_voucher_details",
+        "Official Hotspot Voucher Details",
+        "hotspot",
+        "hotspot/vouchers",
+        "voucher_id"
+    ),
+    v2_list!(
+        "unifi_list_traffic_matching_lists",
+        "Official Traffic Matching Lists",
+        "firewall",
+        "traffic-matching-lists",
+        "traffic_matching_lists"
+    ),
+    v2_detail!(
+        "unifi_get_traffic_matching_list_details",
+        "Official Traffic Matching List Details",
+        "firewall",
+        "traffic-matching-lists",
+        "traffic_matching_list_id"
+    ),
     action!(
         "unifi_block_client",
         "Block Client",
