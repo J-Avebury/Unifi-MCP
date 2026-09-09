@@ -1949,7 +1949,7 @@ impl UnifiMcp {
                 .await?
         } else if endpoint == "stat/sitedpi" {
             let mut body = json!({"type":"by_app"});
-            if let Some(mac) = dpi_mac {
+            if let Some(mac) = dpi_mac.as_deref() {
                 body["macs"] = json!([mac]);
             }
             self.unifi
@@ -1959,6 +1959,23 @@ impl UnifiMcp {
             self.unifi
                 .network_request(Method::GET, endpoint, Some(json!({"_limit":MAX_LIMIT})))
                 .await?
+        };
+        let fingerprint = if endpoint == "stat/sitedpi" {
+            if let Some(mac) = dpi_mac.as_deref() {
+                let clients = self
+                    .unifi
+                    .network_request(Method::GET, "stat/sta", Some(json!({"_limit":MAX_LIMIT})))
+                    .await?;
+                extract_rows_owned(clients).into_iter().find(|row| {
+                    row.get("mac")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value.eq_ignore_ascii_case(mac))
+                })
+            } else {
+                None
+            }
+        } else {
+            None
         };
         let mut rows = extract_rows_owned(payload);
         if output_key == "blocked_clients" {
@@ -1977,9 +1994,35 @@ impl UnifiMcp {
         } else {
             rows.truncate(limit);
         }
-        Ok(
-            json!({"site":self.unifi.site,"total_count":total_count,"returned_count":rows.len(),output_key:rows}),
-        )
+        let mut result = json!({"site":self.unifi.site,"total_count":total_count,"returned_count":rows.len(),output_key:rows});
+        if let Some(row) = fingerprint {
+            let fields = [
+                "mac",
+                "hostname",
+                "name",
+                "device_name",
+                "oui",
+                "dev_vendor",
+                "dev_cat",
+                "dev_family",
+                "os_name",
+                "network",
+                "network_id",
+                "ip",
+                "is_wired",
+                "is_guest",
+            ];
+            result["fingerprint"] = Value::Object(
+                fields
+                    .iter()
+                    .filter_map(|field| {
+                        row.get(*field)
+                            .map(|value| ((*field).into(), value.clone()))
+                    })
+                    .collect(),
+            );
+        }
+        Ok(result)
     }
 
     async fn client_record(&self, args: &Map<String, Value>) -> Result<Value> {
