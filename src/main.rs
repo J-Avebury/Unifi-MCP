@@ -18,6 +18,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+mod legacy_wlan;
+
 const DEFAULT_SITE: &str = "default";
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
@@ -322,6 +324,7 @@ enum ToolKind {
         id_arg: Option<&'static str>,
         body_required: bool,
     },
+    LegacyWlanUpdate,
     Action {
         endpoint: &'static str,
         command: &'static str,
@@ -1644,14 +1647,12 @@ const TOOLS: &[ToolSpec] = &[
         None,
         true
     ),
-    integration_write!(
+    spec!(
         "unifi_update_wlan",
         "Update WLAN",
         "wireless",
-        IntegrationMethod::Put,
-        "wifi/broadcasts/{id}",
-        Some("wifi_broadcast_id"),
-        true
+        "Update WLAN fields through the legacy controller API with fetch-merge-write and read-back verification.",
+        ToolKind::LegacyWlanUpdate
     ),
     integration_write!(
         "unifi_delete_wlan",
@@ -1771,7 +1772,9 @@ impl UnifiMcp {
                     if Self::find_tool(name).is_some_and(|tool| {
                         matches!(
                             tool.kind,
-                            ToolKind::Action { .. } | ToolKind::IntegrationWrite { .. }
+                            ToolKind::Action { .. }
+                                | ToolKind::IntegrationWrite { .. }
+                                | ToolKind::LegacyWlanUpdate
                         )
                     }) {
                         results.push(json!({"name": name, "result": error_envelope("unifi_batch accepts read-only tools only")}));
@@ -1855,6 +1858,7 @@ impl UnifiMcp {
                 self.integration_write(method, endpoint, id_arg, body_required, &args)
                     .await
             }
+            ToolKind::LegacyWlanUpdate => self.legacy_wlan_update(&args).await,
             ToolKind::Action {
                 endpoint,
                 command,
@@ -2250,6 +2254,10 @@ impl UnifiMcp {
             .integration_request_with_query(request_method, &endpoint, body, &query)
             .await?;
         Ok(json!({"preview":preview,"confirmed":true,"data":data}))
+    }
+
+    async fn legacy_wlan_update(&self, args: &Map<String, Value>) -> Result<Value> {
+        legacy_wlan::update(self, args).await
     }
 
     async fn lookup_ip(&self, args: &Map<String, Value>) -> Result<Value> {
@@ -2654,6 +2662,27 @@ impl UnifiClient {
         endpoint: &str,
         body: Option<Value>,
     ) -> Result<Value> {
+        self.network_request_with_redaction(method, endpoint, body, true)
+            .await
+    }
+
+    async fn network_request_unredacted(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        self.network_request_with_redaction(method, endpoint, body, false)
+            .await
+    }
+
+    async fn network_request_with_redaction(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+        redact_response: bool,
+    ) -> Result<Value> {
         self.ensure_login().await?;
         let url = self.network_url(endpoint)?;
         let mut delay = 100;
@@ -2680,7 +2709,7 @@ impl UnifiClient {
                 continue;
             }
             let mut value = parse_json_response(status, text)?;
-            if self.redact_sensitive_fields {
+            if redact_response && self.redact_sensitive_fields {
                 redact_sensitive(&mut value);
             }
             return Ok(value);
@@ -2924,6 +2953,14 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             }
             schema(properties, &required)
         }
+        ToolKind::LegacyWlanUpdate => schema(
+            json!({
+                "body": {"type":"object","description":"WLAN fields to update; current fields are preserved."},
+                "confirm": {"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."},
+                "wifi_broadcast_id": {"type":"string"}
+            }),
+            &["wifi_broadcast_id", "body"],
+        ),
         ToolKind::V2Detail { id_arg, .. } | ToolKind::V2NestedDetail { id_arg, .. } => {
             schema(json!({id_arg:{"type":"string"}}), &[id_arg])
         }
@@ -2943,7 +2980,9 @@ fn tool_model(spec: &ToolSpec) -> Tool {
         ToolAnnotations::with_title(spec.title)
             .read_only(!matches!(
                 spec.kind,
-                ToolKind::Action { .. } | ToolKind::IntegrationWrite { .. }
+                ToolKind::Action { .. }
+                    | ToolKind::IntegrationWrite { .. }
+                    | ToolKind::LegacyWlanUpdate
             ))
             .destructive(matches!(
                 spec.kind,
@@ -2951,10 +2990,11 @@ fn tool_model(spec: &ToolSpec) -> Tool {
                     destructive: true,
                     ..
                 } | ToolKind::IntegrationWrite { .. }
+                    | ToolKind::LegacyWlanUpdate
             ))
             .idempotent(match spec.kind {
                 ToolKind::Action { idempotent, .. } => idempotent,
-                ToolKind::IntegrationWrite { .. } => false,
+                ToolKind::IntegrationWrite { .. } | ToolKind::LegacyWlanUpdate => false,
                 _ => true,
             })
             .open_world(false),
@@ -3455,7 +3495,9 @@ mod tests {
             let annotations = model.annotations.unwrap();
             let mutating = matches!(
                 tool.kind,
-                ToolKind::Action { .. } | ToolKind::IntegrationWrite { .. }
+                ToolKind::Action { .. }
+                    | ToolKind::IntegrationWrite { .. }
+                    | ToolKind::LegacyWlanUpdate
             );
             assert_eq!(annotations.read_only_hint, Some(!mutating));
             if let ToolKind::Action {
@@ -3466,7 +3508,10 @@ mod tests {
             {
                 assert_eq!(annotations.destructive_hint, Some(destructive));
                 assert_eq!(annotations.idempotent_hint, Some(idempotent));
-            } else if matches!(tool.kind, ToolKind::IntegrationWrite { .. }) {
+            } else if matches!(
+                tool.kind,
+                ToolKind::IntegrationWrite { .. } | ToolKind::LegacyWlanUpdate
+            ) {
                 assert_eq!(annotations.destructive_hint, Some(true));
                 assert_eq!(annotations.idempotent_hint, Some(false));
             }
