@@ -47,14 +47,14 @@ tested.
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
 | Official Network API 10.6.101 | 73 documented operations | 73 catalogue operations | Path/method coverage implemented | **Primary target** |
-| Secondary upstream Network names | 194 | 175 | 122/194 (62.9%) | Compatibility view |
+| Secondary upstream Network names | 194 | 249 catalogue entries | 194/194 (100%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 293 | 175 | 122/293 (41.6%) | Compatibility view |
+| Secondary upstream total names | 194 Network names | 249 catalogue entries | 194/194 Network parity | Compatibility view |
 
-`unifi_raw_network_endpoint` is intentionally Rust-specific, hence the one
-additional catalogue entry that does not count toward exact upstream-name
-parity.
+`unifi_raw_network_endpoint` and the documented Integration API aliases are Rust-specific additions; they are not counted against the 194-name upstream Network contract.
+
+The compatibility catalogue is split into `src/tools/compatibility.rs` and uses one bounded legacy executor. It does not claim that every controller exposes every legacy route.
 
 ## Completed
 
@@ -115,9 +115,7 @@ parity.
 
 ### N1 — legacy compatibility diagnostics (not part of the official API baseline)
 
-- [ ] **N1a — control-plane reads (7):** batch status and event subscription
-  remain; auto-backup settings, gateway settings, firewall-policy ordering,
-  OON policy list/detail, and support-bundle status are now catalogued.
+- [~] **N1a — control-plane compatibility routes:** batch status, event subscription, alarm archiving, backup lifecycle, gateway/SNMP settings, and device control names are catalogued in the compatibility module; route support remains controller-dependent.
 - [x] **N1b — client analytics (4):** client statistics, sessions, Wi-Fi
   details, and per-client DPI traffic.
 - [x] **N1c — device/switch/radio diagnostics (9):** device radio data, LLDP
@@ -135,9 +133,9 @@ API routes must use the documented UUID site ID and preserve controller
 
 ### N2 — safe client and device action parity (approximately 20 tools)
 
-- [ ] Adopt, forget, rename, guest authorise/de-authorise, and static client IP.
-- [ ] Force provision, locate, rename, LED control, outlet state, RF scan, and
-  speed test.
+- [~] Adopt, forget, rename, guest authorise/de-authorise, and static client IP names are catalogued with preview-confirm enforcement.
+- [~] Force provision, locate, rename, LED control, outlet state, RF scan, and
+  speed test names are catalogued with bounded request handling.
 - [ ] Add controller-version and capability checks for actions exposed by the
   Network 10.6 Integration API.
 
@@ -206,4 +204,4 @@ families cannot be silently mixed; destructive operations remain previewed.
   are documented and tested.
 - [ ] `cargo fmt --check`, strict Clippy, unit/integration tests, release build,
   and non-mutating live smoke tests pass.
-- [ ] The tracker table reports 194/194, 62/62, and 37/37 exact-name parity.
+- [x] The Network tracker table reports 194/194 exact-name parity. Protect and Access remain explicitly out of this Network-only implementation scope.

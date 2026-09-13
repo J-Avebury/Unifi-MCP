@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 
 mod client;
 mod legacy;
+mod tools;
 
 const DEFAULT_SITE: &str = "default";
 const DEFAULT_LIMIT: usize = 100;
@@ -333,6 +334,14 @@ enum ToolKind {
         destructive: bool,
         idempotent: bool,
     },
+    Compatibility {
+        endpoint: &'static str,
+        method: CompatibilityMethod,
+        id_arg: Option<&'static str>,
+        read_only: bool,
+        destructive: bool,
+        idempotent: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -345,18 +354,26 @@ enum IntegrationMethod {
 
 #[derive(Clone, Copy)]
 struct ToolSpec {
-    name: &'static str,
-    title: &'static str,
-    category: &'static str,
-    description: &'static str,
-    kind: ToolKind,
+    pub(crate) name: &'static str,
+    pub(crate) title: &'static str,
+    pub(crate) category: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) kind: ToolKind,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CompatibilityMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
 }
 
 const DEVICE_IDS: &[&str] = &["_id", "id", "mac"];
 const CLIENT_IDS: &[&str] = &["_id", "id", "mac"];
 const CONFIG_IDS: &[&str] = &["_id", "id"];
 
-const TOOLS: &[ToolSpec] = &[
+const BASE_TOOLS: &[ToolSpec] = &[
     spec!(
         "unifi_tool_index",
         "Tool Index",
@@ -1726,7 +1743,7 @@ impl UnifiMcp {
         Self { unifi }
     }
     fn find_tool(name: &str) -> Option<&'static ToolSpec> {
-        TOOLS.iter().find(|tool| tool.name == name)
+        tools::find(name)
     }
 
     async fn dispatch(&self, name: &str, args: Map<String, Value>, nested: bool) -> Value {
@@ -1776,6 +1793,10 @@ impl UnifiMcp {
                             ToolKind::Action { .. }
                                 | ToolKind::IntegrationWrite { .. }
                                 | ToolKind::LegacyWlanUpdate
+                                | ToolKind::Compatibility {
+                                    read_only: false,
+                                    ..
+                                }
                         )
                     }) {
                         results.push(json!({"name": name, "result": error_envelope("unifi_batch accepts read-only tools only")}));
@@ -1870,14 +1891,32 @@ impl UnifiMcp {
                 self.action(endpoint, command, id_arg, destructive, idempotent, &args)
                     .await
             }
+            ToolKind::Compatibility {
+                endpoint,
+                method,
+                id_arg,
+                read_only,
+                destructive,
+                idempotent,
+            } => {
+                self.compatibility(
+                    endpoint,
+                    method,
+                    id_arg,
+                    read_only,
+                    destructive,
+                    idempotent,
+                    &args,
+                )
+                .await
+            }
         }
     }
 
     fn tool_index(&self, args: &Map<String, Value>) -> Value {
         let category = optional_string(args, "category").map(str::to_ascii_lowercase);
         let search = optional_string(args, "search").map(str::to_ascii_lowercase);
-        let tools = TOOLS
-            .iter()
+        let tools = tools::iter()
             .filter(|tool| {
                 category
                     .as_deref()
@@ -2230,6 +2269,78 @@ impl UnifiMcp {
             json!({"applied": true, "preview": preview, "controller_response": truncate_payload(response, 10)}),
         )
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn compatibility(
+        &self,
+        endpoint_template: &str,
+        method: CompatibilityMethod,
+        id_arg: Option<&str>,
+        read_only: bool,
+        destructive: bool,
+        idempotent: bool,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        let mut endpoint = endpoint_template.to_owned();
+        let identifier = id_arg.map(|key| required_string(args, key)).transpose()?;
+        if let Some(identifier) = identifier {
+            endpoint = endpoint.replace("{id}", identifier);
+        }
+        let request_method = match method {
+            CompatibilityMethod::Get => Method::GET,
+            CompatibilityMethod::Post => Method::POST,
+            CompatibilityMethod::Put => Method::PUT,
+            CompatibilityMethod::Delete => Method::DELETE,
+        };
+        if read_only {
+            return self
+                .unifi
+                .network_request(
+                    request_method,
+                    &endpoint,
+                    Some(json!({"_limit": MAX_LIMIT})),
+                )
+                .await;
+        }
+        let mut body = args
+            .get("body")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(args.clone()));
+        if let Value::Object(object) = &mut body {
+            object.remove("confirm");
+            object.remove("body");
+            if let Some(identifier) = identifier
+                && id_arg.is_some_and(|key| key == "mac_address")
+            {
+                object.insert("mac".into(), Value::String(identifier.to_owned()));
+            }
+        }
+        let mut preview_body = body.clone();
+        redact_sensitive(&mut preview_body);
+        let preview = json!({
+            "method": request_method.as_str(),
+            "endpoint": endpoint,
+            "target": id_arg.map(|key| json!({key: identifier})),
+            "body": preview_body,
+            "destructive": destructive,
+            "idempotent": idempotent,
+            "requires_confirmation": true,
+        });
+        if !args
+            .get("confirm")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(json!({"preview": preview, "requires_confirmation": true}));
+        }
+        let response = self
+            .unifi
+            .network_request(request_method, &endpoint, Some(body))
+            .await?;
+        Ok(
+            json!({"confirmed": true, "preview": preview, "controller_response": truncate_payload(response, 10)}),
+        )
+    }
 }
 
 impl ServerHandler for UnifiMcp {
@@ -2243,7 +2354,7 @@ impl ServerHandler for UnifiMcp {
     ) -> Result<ListToolsResult, McpError> {
         Ok(ListToolsResult {
             result_type: Some(ResultType::COMPLETE),
-            tools: TOOLS.iter().map(tool_model).collect(),
+            tools: tools::iter().map(tool_model).collect(),
             meta: None,
             next_cursor: None,
             ttl_ms: None,
@@ -2401,6 +2512,23 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             json!({id_arg:{"type":"string"},"confirm":{"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."}}),
             &[id_arg],
         ),
+        ToolKind::Compatibility {
+            id_arg, read_only, ..
+        } => {
+            let mut properties = json!({
+                "body": {"type":"object","description":"Controller fields for this compatibility operation."},
+                "confirm": {"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."}
+            });
+            if let Some(id_arg) = id_arg {
+                properties[id_arg] = json!({"type":"string"});
+            }
+            let required = if read_only {
+                Vec::new()
+            } else {
+                id_arg.into_iter().collect()
+            };
+            schema(properties, &required)
+        }
     };
     Tool::new(
         Cow::Borrowed(spec.name),
@@ -2415,6 +2543,10 @@ fn tool_model(spec: &ToolSpec) -> Tool {
                 ToolKind::Action { .. }
                     | ToolKind::IntegrationWrite { .. }
                     | ToolKind::LegacyWlanUpdate
+                    | ToolKind::Compatibility {
+                        read_only: false,
+                        ..
+                    }
             ))
             .destructive(matches!(
                 spec.kind,
@@ -2423,10 +2555,15 @@ fn tool_model(spec: &ToolSpec) -> Tool {
                     ..
                 } | ToolKind::IntegrationWrite { .. }
                     | ToolKind::LegacyWlanUpdate
+                    | ToolKind::Compatibility {
+                        read_only: false,
+                        ..
+                    }
             ))
             .idempotent(match spec.kind {
                 ToolKind::Action { idempotent, .. } => idempotent,
                 ToolKind::IntegrationWrite { .. } | ToolKind::LegacyWlanUpdate => false,
+                ToolKind::Compatibility { idempotent, .. } => idempotent,
                 _ => true,
             })
             .open_world(false),
@@ -2895,7 +3032,7 @@ mod tests {
     }
     #[test]
     fn catalog_names_are_unique() {
-        let mut names = TOOLS.iter().map(|t| t.name).collect::<Vec<_>>();
+        let mut names = tools::iter().map(|t| t.name).collect::<Vec<_>>();
         let total = names.len();
         names.sort_unstable();
         names.dedup();
@@ -2922,7 +3059,7 @@ mod tests {
     }
     #[test]
     fn catalog_annotations_match_mutability() {
-        for tool in TOOLS {
+        for tool in tools::iter() {
             let model = tool_model(tool);
             let annotations = model.annotations.unwrap();
             let mutating = matches!(
@@ -2930,6 +3067,10 @@ mod tests {
                 ToolKind::Action { .. }
                     | ToolKind::IntegrationWrite { .. }
                     | ToolKind::LegacyWlanUpdate
+                    | ToolKind::Compatibility {
+                        read_only: false,
+                        ..
+                    }
             );
             assert_eq!(annotations.read_only_hint, Some(!mutating));
             if let ToolKind::Action {

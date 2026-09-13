@@ -8,10 +8,7 @@ the binary as a child process and talks to it over stdin/stdout.
 ## Compatibility target
 
 The tool names and response contract target the official local UniFi Network
-API, implemented natively in Rust. The current release exposes 128 read-only tools
-covering discovery, batching, dashboards, devices, clients, WLANs, networks,
-events, alarms, routing, firewall inventory, switching, statistics, DPI, and
-system settings.
+API, implemented natively in Rust. The current release exposes 249 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors.
 
 The Integration API inventory tools resolve the controller's UUID site ID from
 the configured legacy site reference before making a request. They require an
