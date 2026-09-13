@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    MAX_LIMIT, UnifiMcp, bounded_limit, compact_endpoint_rows, compact_rows, current_unix_seconds,
+    MAX_LIMIT, UnifiMcp, bounded_limit, compact_endpoint_rows, current_unix_seconds,
     extract_rows_owned, optional_string, required_mac, required_string, truncate_payload,
     value_contains,
 };
@@ -222,48 +222,6 @@ impl UnifiMcp {
             }
         }
         Ok(json!({"ip_address":ip,"count":matches.len(),"matches":matches}))
-    }
-
-    pub(crate) async fn dashboard(&self) -> Result<Value> {
-        let health = self
-            .unifi
-            .network_request(
-                Method::GET,
-                "stat/health",
-                Some(json!({"_limit":MAX_LIMIT})),
-            )
-            .await?;
-        let devices = self
-            .unifi
-            .network_request(
-                Method::GET,
-                "stat/device",
-                Some(json!({"_limit":MAX_LIMIT})),
-            )
-            .await?;
-        let clients = self
-            .unifi
-            .network_request(Method::GET, "stat/sta", Some(json!({"_limit":MAX_LIMIT})))
-            .await?;
-        let wlans = self
-            .unifi
-            .network_request(
-                Method::GET,
-                "list/wlanconf",
-                Some(json!({"_limit":MAX_LIMIT})),
-            )
-            .await?;
-        let alarms = self
-            .unifi
-            .network_request(Method::GET, "stat/alarm", Some(json!({"_limit":25})))
-            .await?;
-        let events = self
-            .unifi
-            .network_request(Method::GET, "stat/event", Some(json!({"_limit":25})))
-            .await?;
-        Ok(
-            json!({"site":self.unifi.site,"counts":{"devices":extract_rows_owned(devices.clone()).len(),"online_clients":extract_rows_owned(clients).len(),"wlans":extract_rows_owned(wlans.clone()).len(),"alarms":extract_rows_owned(alarms).len(),"events":extract_rows_owned(events).len()},"health":extract_rows_owned(health),"devices":compact_rows(extract_rows_owned(devices),50,&["name","model","type","mac","ip","version","state","adopted"]),"wlans":compact_rows(extract_rows_owned(wlans),50,&["name","enabled","security","wlan_band","_id"])}),
-        )
     }
 
     pub(crate) async fn raw(&self, args: &Map<String, Value>) -> Result<Value> {

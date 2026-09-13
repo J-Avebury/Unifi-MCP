@@ -134,6 +134,105 @@ impl UnifiClient {
         }
         unreachable!()
     }
+    pub(crate) async fn integration_or_v2_request(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        match self
+            .integration_request(method.clone(), endpoint, body.clone())
+            .await
+        {
+            Ok(value) => Ok(value),
+            Err(error)
+                if is_capability_error(&error)
+                    || (endpoint.contains("object-oriented-network-config")
+                        && error.to_string().contains("HTTP 400")) =>
+            {
+                self.network_v2_request(method, endpoint, body).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) async fn integration_or_v2_request_with_query(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+        query: &[(&str, String)],
+    ) -> Result<Value> {
+        match self
+            .integration_request_with_query(method.clone(), endpoint, body.clone(), query)
+            .await
+        {
+            Ok(value) => Ok(value),
+            Err(error)
+                if is_capability_error(&error)
+                    || (endpoint.contains("object-oriented-network-config")
+                        && error.to_string().contains("HTTP 400")) =>
+            {
+                self.network_v2_request_with_query(method, endpoint, body, query)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn network_v2_request(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        self.network_v2_request_with_query(method, endpoint, body, &[])
+            .await
+    }
+
+    async fn network_v2_request_with_query(
+        &self,
+        method: Method,
+        endpoint: &str,
+        body: Option<Value>,
+        query: &[(&str, String)],
+    ) -> Result<Value> {
+        self.ensure_login().await?;
+        let mut url = self.network_v2_url(endpoint)?;
+        for (key, value) in query {
+            url.query_pairs_mut().append_pair(key, value);
+        }
+        let mut request = self
+            .client
+            .request(method, url)
+            .header("Accept", "application/json");
+        if let Some(key) = &self.api_key {
+            request = request.header("X-API-Key", key);
+        }
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request
+            .send()
+            .await
+            .context("UniFi Network v2 request failed")?;
+        let status = response.status();
+        let text = response.text().await?;
+        if status == StatusCode::NOT_FOUND
+            || (status == StatusCode::BAD_REQUEST
+                && endpoint.contains("object-oriented-network-config"))
+        {
+            bail!(
+                "UniFi Network v2 endpoint '{endpoint}' is not supported by this controller version or enabled feature set"
+            );
+        }
+        let mut value = parse_json_response(status, text)?;
+        if self.redact_sensitive_fields {
+            redact_sensitive(&mut value);
+        }
+        Ok(value)
+    }
+
     pub(crate) async fn integration_request(
         &self,
         method: Method,
@@ -260,6 +359,13 @@ impl UnifiClient {
             endpoint.trim().trim_start_matches('/')
         ))
     }
+    fn network_v2_url(&self, endpoint: &str) -> Result<Url> {
+        self.proxy_url_path(&format!(
+            "network/v2/api/site/{}/{}",
+            self.site,
+            endpoint.trim().trim_start_matches('/')
+        ))
+    }
     fn integration_url(&self, site_id: &str, endpoint: &str) -> Result<Url> {
         self.proxy_url_path(&format!(
             "network/integration/v1/sites/{site_id}/{}",
@@ -286,4 +392,9 @@ impl UnifiClient {
         url.set_fragment(None);
         Ok(url)
     }
+}
+
+fn is_capability_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("not supported") || message.contains("requires unifi network integration api")
 }

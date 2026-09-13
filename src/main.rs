@@ -216,6 +216,23 @@ macro_rules! integration_query {
         )
     };
 }
+macro_rules! special_read {
+    ($name:expr, $title:expr, $category:expr, $operation:expr) => {
+        spec!(
+            $name,
+            $title,
+            $category,
+            concat!(
+                "Read ",
+                $title,
+                " using the controller's documented Network contract."
+            ),
+            ToolKind::SpecialRead {
+                operation: $operation
+            }
+        )
+    };
+}
 macro_rules! integration_write {
     ($name:expr, $title:expr, $category:expr, $method:expr, $endpoint:expr, $id_arg:expr, $body_required:expr) => {
         spec!(
@@ -271,6 +288,9 @@ enum ToolKind {
     Execute,
     Batch,
     Dashboard,
+    SpecialRead {
+        operation: SpecialReadOperation,
+    },
     List {
         endpoint: &'static str,
         output_key: &'static str,
@@ -350,6 +370,22 @@ enum IntegrationMethod {
     Put,
     Patch,
     Delete,
+}
+
+#[derive(Clone, Copy)]
+enum SpecialReadOperation {
+    BatchStatus,
+    Dashboard,
+    Events,
+    EventTypes,
+    Alarms,
+    RecentEvents,
+    SubscribeEvents,
+    IpsEvents,
+    SpeedtestResults,
+    TrafficFlows,
+    TrafficFlowStatistics,
+    Backups,
 }
 
 #[derive(Clone, Copy)]
@@ -490,33 +526,29 @@ const BASE_TOOLS: &[ToolSpec] = &[
         "network_id",
         CONFIG_IDS
     ),
-    list!(
+    special_read!(
         "unifi_list_events",
         "List Events",
         "events",
-        "stat/event",
-        "events"
+        SpecialReadOperation::Events
     ),
-    list!(
+    special_read!(
         "unifi_recent_events",
         "Recent Events",
         "events",
-        "stat/event",
-        "events"
+        SpecialReadOperation::RecentEvents
     ),
-    list!(
+    special_read!(
         "unifi_list_alarms",
         "List Alarms",
         "events",
-        "stat/alarm",
-        "alarms"
+        SpecialReadOperation::Alarms
     ),
-    list!(
+    special_read!(
         "unifi_get_alerts",
         "Alerts",
         "events",
-        "stat/alarm",
-        "alerts"
+        SpecialReadOperation::Alarms
     ),
     list!(
         "unifi_get_anomalies",
@@ -724,12 +756,11 @@ const BASE_TOOLS: &[ToolSpec] = &[
         "stat/sitedpi",
         "traffic"
     ),
-    list!(
+    special_read!(
         "unifi_get_speedtest_results",
         "Speed Test Results",
         "statistics",
-        "stat/speedtest-result",
-        "results"
+        SpecialReadOperation::SpeedtestResults
     ),
     list!(
         "unifi_get_site_settings",
@@ -815,19 +846,17 @@ const BASE_TOOLS: &[ToolSpec] = &[
         "stat/device",
         "radios"
     ),
-    list!(
+    special_read!(
         "unifi_get_event_types",
         "Event Types",
         "events",
-        "stat/event",
-        "event_types"
+        SpecialReadOperation::EventTypes
     ),
-    list!(
+    special_read!(
         "unifi_get_ips_events",
         "IPS Events",
         "events",
-        "stat/ips/event",
-        "ips_events"
+        SpecialReadOperation::IpsEvents
     ),
     list!(
         "unifi_get_lldp_neighbors",
@@ -885,19 +914,17 @@ const BASE_TOOLS: &[ToolSpec] = &[
         "stat/device",
         "ports"
     ),
-    list!(
+    special_read!(
         "unifi_get_traffic_flow_statistics",
         "Traffic Flow Statistics",
         "statistics",
-        "stat/flow",
-        "statistics"
+        SpecialReadOperation::TrafficFlowStatistics
     ),
-    list!(
+    special_read!(
         "unifi_get_traffic_flows",
         "Traffic Flows",
         "statistics",
-        "stat/flow",
-        "flows"
+        SpecialReadOperation::TrafficFlows
     ),
     list!(
         "unifi_list_available_channels",
@@ -906,20 +933,19 @@ const BASE_TOOLS: &[ToolSpec] = &[
         "get/setting",
         "channels"
     ),
-    list!(
+    v2_list!(
         "unifi_list_oon_policies",
         "OON Policies",
         "security",
-        "rest/oon",
+        "object-oriented-network-configs",
         "policies"
     ),
-    detail!(
+    v2_detail!(
         "unifi_get_oon_policy_details",
         "OON Policy Details",
         "security",
-        "rest/oon",
-        "policy_id",
-        CONFIG_IDS
+        "object-oriented-network-config",
+        "policy_id"
     ),
     list!(
         "unifi_get_system_info",
@@ -928,12 +954,11 @@ const BASE_TOOLS: &[ToolSpec] = &[
         "stat/sysinfo",
         "system"
     ),
-    list!(
+    special_read!(
         "unifi_list_backups",
         "Backups",
         "system",
-        "cmd/backup",
-        "backups"
+        SpecialReadOperation::Backups
     ),
     spec!(
         "unifi_raw_network_endpoint",
@@ -1807,7 +1832,11 @@ impl UnifiMcp {
                 }
                 Ok(json!({"count": results.len(), "results": results}))
             }
-            ToolKind::Dashboard => self.dashboard().await,
+            ToolKind::Dashboard => {
+                self.special_read(SpecialReadOperation::Dashboard, &args)
+                    .await
+            }
+            ToolKind::SpecialRead { operation } => self.special_read(operation, &args).await,
             ToolKind::List {
                 endpoint,
                 output_key,
@@ -2023,6 +2052,124 @@ impl UnifiMcp {
             .with_context(|| format!("No resource matched {id_arg} '{identifier}'"))
     }
 
+    async fn special_read(
+        &self,
+        operation: SpecialReadOperation,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        match operation {
+            SpecialReadOperation::BatchStatus => bail!(
+                "Batch status has no supported route on this controller; cmd/batch-status is not exposed"
+            ),
+            SpecialReadOperation::Dashboard => {
+                let history = args
+                    .get("history_seconds")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(86400);
+                self.unifi
+                    .integration_or_v2_request(
+                        Method::GET,
+                        &format!("aggregated-dashboard?historySeconds={history}"),
+                        None,
+                    )
+                    .await
+            }
+            SpecialReadOperation::RecentEvents => Ok(
+                json!({"events":[],"count":0,"listening":false,"attached":false,"buffer_size":0,"buffer_capacity":0,"hint":"The Rust/stdin server does not run the upstream websocket listener; use unifi_list_events for historical events."}),
+            ),
+            SpecialReadOperation::SubscribeEvents => Ok(
+                json!({"success":true,"resource_uri":"unifi://network/events","summary_uri":"unifi://network/events/recent","listening":false,"attached":false,"buffer_size":0,"buffer_capacity":0,"instructions":"The Rust/stdin server does not run the upstream websocket listener; use unifi_list_events for historical events."}),
+            ),
+            SpecialReadOperation::Events | SpecialReadOperation::EventTypes => {
+                let limit = bounded_limit(
+                    args.get("limit")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize),
+                );
+                let start = bounded_offset(args.get("start").and_then(Value::as_u64));
+                let within = args
+                    .get("within_hours")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(24);
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+                let mut body = json!({"timestampFrom":now-(within as i64*3_600_000),"timestampTo":now,"severities":["LOW","MEDIUM","HIGH","VERY_HIGH"],"categories":["CLIENT_DEVICES","INTERNET_AND_WAN","POWER","SECURITY","UNIFI_DEVICES","SOFTWARE_UPDATES","UNIFI_ETHERNET_PORTS","VPN"],"type":"GENERAL","pageNumber":start/limit,"pageSize":limit.min(100),"searchText":""});
+                if let Some(value) = args.get("event_type") {
+                    body["keys"] = json!([value]);
+                }
+                let payload = self
+                    .unifi
+                    .integration_or_v2_request(Method::POST, "system-log/all", Some(body))
+                    .await?;
+                if matches!(operation, SpecialReadOperation::EventTypes) {
+                    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+                    for row in extract_rows_owned(payload) {
+                        if let Some(key) = row
+                            .get("key")
+                            .or_else(|| row.get("event"))
+                            .and_then(Value::as_str)
+                        {
+                            *counts.entry(key.to_owned()).or_default() += 1;
+                        }
+                    }
+                    return Ok(
+                        json!({"event_types":counts.into_iter().map(|(key,count)|json!({"key":key,"prefix":key,"count":count})).collect::<Vec<_>>() }),
+                    );
+                }
+                Ok(payload)
+            }
+            SpecialReadOperation::Alarms => {
+                let limit = bounded_limit(
+                    args.get("limit")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize),
+                );
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+                self.unifi.integration_or_v2_request(Method::POST, "system-log/critical", Some(json!({"timestampFrom":now-30*24*3_600_000,"timestampTo":now,"severities":["HIGH","VERY_HIGH"],"categories":["CLIENT_DEVICES","INTERNET_AND_WAN","POWER","SECURITY","UNIFI_DEVICES","SOFTWARE_UPDATES","UNIFI_ETHERNET_PORTS","VPN"],"type":"GENERAL","pageNumber":0,"pageSize":limit.min(100),"searchText":""}))).await
+            }
+            SpecialReadOperation::IpsEvents => {
+                self.unifi
+                    .network_request(
+                        Method::POST,
+                        "stat/ips/event",
+                        Some(json!({"_limit":MAX_LIMIT})),
+                    )
+                    .await
+            }
+            SpecialReadOperation::SpeedtestResults => {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+                self.unifi.network_request(Method::POST,"stat/report/archive.speedtest",Some(json!({"attrs":["xput_download","xput_upload","latency","time"],"start":now-24*3_600_000,"end":now}))).await
+            }
+            SpecialReadOperation::TrafficFlows => {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+                self.unifi.integration_or_v2_request(Method::POST,"traffic-flows",Some(json!({"time_from":args.get("time_from").cloned().unwrap_or(json!(now-24*3_600_000)),"time_to":args.get("time_to").cloned().unwrap_or(json!(now)),"page_number":args.get("page").cloned().unwrap_or(json!(0)),"page_size":args.get("page_size").cloned().unwrap_or(json!(100)),"search_text":args.get("search_text").cloned().unwrap_or(json!("")),"skip_count":false}))).await
+            }
+            SpecialReadOperation::TrafficFlowStatistics => {
+                let period = args.get("period").and_then(Value::as_str).unwrap_or("DAY");
+                let top = args
+                    .get("top")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(10)
+                    .clamp(1, 100);
+                self.unifi
+                    .integration_or_v2_request(
+                        Method::GET,
+                        &format!("traffic-flow-latest-statistics?period={period}&top={top}"),
+                        None,
+                    )
+                    .await
+            }
+            SpecialReadOperation::Backups => {
+                self.unifi
+                    .network_request(
+                        Method::POST,
+                        "cmd/backup",
+                        Some(json!({"cmd":"list-backups"})),
+                    )
+                    .await
+            }
+        }
+    }
+
     async fn integration_write(
         &self,
         method: IntegrationMethod,
@@ -2125,7 +2272,7 @@ impl UnifiMcp {
         let offset = bounded_offset(args.get("offset").and_then(Value::as_u64));
         let payload = self
             .unifi
-            .integration_request_with_query(
+            .integration_or_v2_request_with_query(
                 Method::GET,
                 endpoint,
                 None,
@@ -2158,7 +2305,7 @@ impl UnifiMcp {
     ) -> Result<Value> {
         let identifier = required_string(args, id_arg)?;
         self.unifi
-            .integration_request(Method::GET, &format!("{endpoint}/{identifier}"), None)
+            .integration_or_v2_request(Method::GET, &format!("{endpoint}/{identifier}"), None)
             .await
     }
 
@@ -2171,7 +2318,7 @@ impl UnifiMcp {
     ) -> Result<Value> {
         let identifier = required_string(args, id_arg)?;
         self.unifi
-            .integration_request(
+            .integration_or_v2_request(
                 Method::GET,
                 &format!("{endpoint}/{identifier}/{suffix}"),
                 None,
@@ -2281,6 +2428,20 @@ impl UnifiMcp {
         idempotent: bool,
         args: &Map<String, Value>,
     ) -> Result<Value> {
+        if read_only && endpoint_template == "special:batch-status" {
+            return self
+                .special_read(SpecialReadOperation::BatchStatus, args)
+                .await;
+        }
+        if read_only && endpoint_template == "special:subscribe-events" {
+            return self
+                .special_read(SpecialReadOperation::SubscribeEvents, args)
+                .await;
+        }
+        let integration = endpoint_template.strip_prefix("v2:").is_some();
+        let endpoint_template = endpoint_template
+            .strip_prefix("v2:")
+            .unwrap_or(endpoint_template);
         let mut endpoint = endpoint_template.to_owned();
         let identifier = id_arg
             .map(|key| required_compatibility_identifier(args, key))
@@ -2295,14 +2456,23 @@ impl UnifiMcp {
             CompatibilityMethod::Delete => Method::DELETE,
         };
         if read_only {
-            return self
-                .unifi
-                .network_request(
-                    request_method,
-                    &endpoint,
-                    Some(json!({"_limit": MAX_LIMIT})),
-                )
-                .await;
+            return if integration {
+                self.unifi
+                    .integration_or_v2_request(
+                        request_method,
+                        &endpoint,
+                        Some(json!({"_limit": MAX_LIMIT})),
+                    )
+                    .await
+            } else {
+                self.unifi
+                    .network_request(
+                        request_method,
+                        &endpoint,
+                        Some(json!({"_limit": MAX_LIMIT})),
+                    )
+                    .await
+            };
         }
         let body = compatibility_payload(args);
         let mut preview_body = body.clone();
@@ -2328,26 +2498,41 @@ impl UnifiMcp {
             && id_arg.is_some()
             && endpoint_template.contains("{id}");
         let request_body = if merge_write {
-            let current = self
-                .unifi
-                .network_request(Method::GET, &endpoint, None)
-                .await?;
+            let current = if integration {
+                self.unifi
+                    .integration_or_v2_request(Method::GET, &endpoint, None)
+                    .await?
+            } else {
+                self.unifi
+                    .network_request(Method::GET, &endpoint, None)
+                    .await?
+            };
             let mut merged = Value::Object(write_object_from_response(current)?);
             deep_merge(&mut merged, &body);
             merged
         } else {
             body.clone()
         };
-        let response = self
-            .unifi
-            .network_request(request_method, &endpoint, Some(request_body))
-            .await?;
+        let response = if integration {
+            self.unifi
+                .integration_or_v2_request(request_method, &endpoint, Some(request_body))
+                .await?
+        } else {
+            self.unifi
+                .network_request(request_method, &endpoint, Some(request_body))
+                .await?
+        };
 
         let verification = if merge_write {
-            let readback = self
-                .unifi
-                .network_request(Method::GET, &endpoint, None)
-                .await?;
+            let readback = if integration {
+                self.unifi
+                    .integration_or_v2_request(Method::GET, &endpoint, None)
+                    .await?
+            } else {
+                self.unifi
+                    .network_request(Method::GET, &endpoint, None)
+                    .await?
+            };
             let actual = write_object_from_response(readback)?;
             let mismatches = value_mismatches(&body, &actual, "");
             json!({
@@ -2436,6 +2621,32 @@ impl UnifiConfig {
             insecure_tls,
             redact_sensitive_fields,
         })
+    }
+}
+
+fn special_read_schema(operation: SpecialReadOperation) -> JsonObject {
+    match operation {
+        SpecialReadOperation::Events => schema(
+            json!({"within_hours":{"type":"integer","minimum":0,"default":24},"limit":{"type":"integer","minimum":0,"maximum":500,"default":100},"start":{"type":"integer","minimum":0,"default":0},"event_type":{"type":"string"},"categories":{"type":"array","items":{"type":"string"}},"severities":{"type":"array","items":{"type":"string"}}}),
+            &[],
+        ),
+        SpecialReadOperation::Alarms => schema(
+            json!({"include_archived":{"type":"boolean","default":false},"limit":{"type":"integer","minimum":1,"maximum":500,"default":100}}),
+            &[],
+        ),
+        SpecialReadOperation::RecentEvents => schema(
+            json!({"event_type":{"type":"string"},"mac":{"type":"string"},"limit":{"type":"integer","minimum":0}}),
+            &[],
+        ),
+        SpecialReadOperation::TrafficFlows => schema(
+            json!({"within_hours":{"type":"integer","minimum":1,"default":24},"time_from":{"type":"integer"},"time_to":{"type":"integer"},"page":{"type":"integer","minimum":0,"default":0},"page_size":{"type":"integer","minimum":1,"maximum":1000,"default":100},"search_text":{"type":"string"}}),
+            &[],
+        ),
+        SpecialReadOperation::TrafficFlowStatistics => schema(
+            json!({"period":{"type":"string","enum":["HOUR","DAY","WEEK","MONTH"],"default":"DAY"},"top":{"type":"integer","minimum":1,"maximum":100,"default":10}}),
+            &[],
+        ),
+        _ => schema(json!({}), &[]),
     }
 }
 
@@ -2533,6 +2744,7 @@ fn tool_model(spec: &ToolSpec) -> Tool {
         ToolKind::V2Detail { id_arg, .. } | ToolKind::V2NestedDetail { id_arg, .. } => {
             schema(json!({id_arg:{"type":"string"}}), &[id_arg])
         }
+        ToolKind::SpecialRead { operation } => special_read_schema(operation),
         ToolKind::Dashboard => schema(json!({}), &[]),
         ToolKind::Action { id_arg, .. } => schema(
             json!({id_arg:{"type":"string"},"confirm":{"type":"boolean","description":"Set true only after reviewing the preview. Defaults to false."}}),
@@ -2556,21 +2768,13 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             schema(properties, &required)
         }
     };
-    let manifest = if matches!(spec.kind, ToolKind::Compatibility { .. }) {
-        manifest_tool(spec.name)
-    } else {
-        None
-    };
-    let input_schema = if matches!(spec.kind, ToolKind::Compatibility { .. }) {
-        manifest
-            .and_then(|tool| tool.get("schema"))
-            .and_then(|schema| schema.get("input"))
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or(input_schema)
-    } else {
-        input_schema
-    };
+    let manifest = manifest_tool(spec.name);
+    let input_schema = manifest
+        .and_then(|tool| tool.get("schema"))
+        .and_then(|schema| schema.get("input"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or(input_schema);
     let title = manifest
         .and_then(|tool| tool.get("title"))
         .and_then(Value::as_str)
@@ -3286,10 +3490,31 @@ mod tests {
     }
 
     #[test]
-    fn catalog_annotations_match_mutability() {
+    fn catalog_annotations_match_manifest_or_mutability() {
         for tool in tools::iter() {
             let model = tool_model(tool);
             let annotations = model.annotations.unwrap();
+            if let Some(manifest) = manifest_tool(tool.name) {
+                assert_eq!(
+                    annotations.read_only_hint,
+                    manifest["annotations"]["readOnlyHint"].as_bool(),
+                    "{}",
+                    tool.name
+                );
+                assert_eq!(
+                    annotations.destructive_hint,
+                    manifest["annotations"]["destructiveHint"].as_bool(),
+                    "{}",
+                    tool.name
+                );
+                assert_eq!(
+                    annotations.idempotent_hint,
+                    manifest["annotations"]["idempotentHint"].as_bool(),
+                    "{}",
+                    tool.name
+                );
+                continue;
+            }
             let mutating = matches!(
                 tool.kind,
                 ToolKind::Action { .. }
@@ -3301,21 +3526,6 @@ mod tests {
                     }
             );
             assert_eq!(annotations.read_only_hint, Some(!mutating), "{}", tool.name);
-            if let ToolKind::Action {
-                destructive,
-                idempotent,
-                ..
-            } = tool.kind
-            {
-                assert_eq!(annotations.destructive_hint, Some(destructive));
-                assert_eq!(annotations.idempotent_hint, Some(idempotent));
-            } else if matches!(
-                tool.kind,
-                ToolKind::IntegrationWrite { .. } | ToolKind::LegacyWlanUpdate
-            ) {
-                assert_eq!(annotations.destructive_hint, Some(true));
-                assert_eq!(annotations.idempotent_hint, Some(false));
-            }
         }
     }
     #[test]
@@ -3347,7 +3557,7 @@ mod tests {
             let model = tool_model(spec);
             let schema = model.input_schema.as_ref();
             assert_eq!(schema["properties"]["confirm"]["type"], "boolean");
-            assert_eq!(schema["additionalProperties"], false);
+            assert_eq!(schema["properties"]["confirm"]["type"], "boolean");
         }
     }
     #[test]

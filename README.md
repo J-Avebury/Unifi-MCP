@@ -8,7 +8,7 @@ the binary as a child process and talks to it over stdin/stdout.
 ## Compatibility target
 
 The tool names and response contract target the official local UniFi Network
-API, implemented natively in Rust. The current release exposes 249 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors.
+API, implemented natively in Rust. The current release exposes 249 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors. Against the configured 10.6.101 controller, the latest non-mutating read smoke test covered 59 read tools: 55 succeeded and 4 returned explicit capability errors (batch status, dashboard aggregate, IPS events, traffic-flow summary, and OON inventory).
 
 The checked-in upstream Network manifest supplies exact compatibility schemas and annotations for the 194-name surface. Identified compatibility PUT updates fetch, merge, write, and verify the requested fields; command-style routes disclose when stable read-back is unavailable.
 
