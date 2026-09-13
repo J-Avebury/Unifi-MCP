@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{MAX_LIMIT, UnifiMcp, extract_rows_owned, redact_sensitive, required_string};
 
-pub(super) async fn update(mcp: &UnifiMcp, args: &Map<String, Value>) -> Result<Value> {
+pub(crate) async fn update(mcp: &UnifiMcp, args: &Map<String, Value>) -> Result<Value> {
     let wlan_id = required_string(args, "wifi_broadcast_id")?;
     let updates = args
         .get("body")
