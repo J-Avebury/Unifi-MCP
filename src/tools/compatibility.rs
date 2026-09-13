@@ -71,17 +71,25 @@ pub(crate) const COMPATIBILITY_TOOLS: &[ToolSpec] = &[
         "events",
         "stat/event",
     ),
-    read(
+    write(
         "unifi_archive_alarm",
         "Archive Alarm",
         "events",
         "cmd/alarm",
+        CompatibilityMethod::Post,
+        Some("alarm_id"),
+        false,
+        true,
     ),
-    read(
+    write(
         "unifi_archive_all_alarms",
         "Archive All Alarms",
         "events",
         "cmd/alarm",
+        CompatibilityMethod::Post,
+        None,
+        false,
+        true,
     ),
     write(
         "unifi_configure_port_aggregation",
@@ -120,7 +128,7 @@ pub(crate) const COMPATIBILITY_TOOLS: &[ToolSpec] = &[
         "cmd/backup",
         CompatibilityMethod::Post,
         None,
-        true,
+        false,
         false,
     ),
     write(

@@ -10,6 +10,8 @@ the binary as a child process and talks to it over stdin/stdout.
 The tool names and response contract target the official local UniFi Network
 API, implemented natively in Rust. The current release exposes 249 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors.
 
+The checked-in upstream Network manifest supplies exact compatibility schemas and annotations for the 194-name surface. Identified compatibility PUT updates fetch, merge, write, and verify the requested fields; command-style routes disclose when stable read-back is unavailable.
+
 The Integration API inventory tools resolve the controller's UUID site ID from
 the configured legacy site reference before making a request. They require an
 API key and deliberately refuse to fall back to a different site if no exact

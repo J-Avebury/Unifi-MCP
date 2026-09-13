@@ -15,10 +15,7 @@ Its 194 names must not be mistaken for the complete 10.6.101 API contract.
 until the documented Network API 10.6.101 endpoint families are covered and the
 Network definition of done below passes.
 
-**Validation mode: implementation first.** Live-controller smoke tests are
-paused at the user's request until the Network implementation batches are built
-out. During this phase, use formatting, compilation, Clippy, unit tests, and
-static contract checks only; perform the complete live test pass afterwards.
+**Validation mode: full Network gate.** Static contract tests, unit tests, release builds, and non-mutating live smoke tests are required; no live mutation is confirmed automatically.
 
 ## Official API 10.6.101 baseline
 
@@ -50,11 +47,11 @@ tested.
 | Secondary upstream Network names | 194 | 249 catalogue entries | 194/194 (100%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 194 Network names | 249 catalogue entries | 194/194 Network parity | Compatibility view |
+| Secondary upstream total names | 194 | 249 catalogue entries | 194/194 Network parity | Compatibility view |
 
 `unifi_raw_network_endpoint` and the documented Integration API aliases are Rust-specific additions; they are not counted against the 194-name upstream Network contract.
 
-The compatibility catalogue is split into `src/tools/compatibility.rs` and uses one bounded legacy executor. It does not claim that every controller exposes every legacy route.
+The compatibility catalogue is split into `src/tools/compatibility.rs` and uses the checked-in upstream manifest for exact compatibility input schemas and annotation hints. Identified PUT updates use fetch-merge-write and post-write field verification; command-style routes report when stable read-back is unavailable. Every unsupported legacy route returns an explicit capability error.
 
 ## Completed
 
@@ -133,9 +130,9 @@ API routes must use the documented UUID site ID and preserve controller
 
 ### N2 — safe client and device action parity (approximately 20 tools)
 
-- [~] Adopt, forget, rename, guest authorise/de-authorise, and static client IP names are catalogued with preview-confirm enforcement.
+- [~] Adopt, forget, rename, guest authorise/de-authorise, and static client IP names use manifest-backed schemas and preview-confirm enforcement; live route support remains controller-dependent.
 - [~] Force provision, locate, rename, LED control, outlet state, RF scan, and
-  speed test names are catalogued with bounded request handling.
+  speed test names use manifest-backed schemas and bounded request handling.
 - [ ] Add controller-version and capability checks for actions exposed by the
   Network 10.6 Integration API.
 
@@ -145,12 +142,9 @@ live action without an explicit operator request.
 
 ### N3 — configuration CRUD and write verification (approximately 72 tools)
 
-- [ ] Create/update/delete/toggle WLANs, networks, port forwards, routes,
-  user groups, port profiles, client groups, ACLs, QoS, traffic routes, firewall
-  groups/zones/policies, DNS/Dynamic DNS, OON, content filters, and VPN state.
-- [ ] Preview uses fetch-merge-write for partial updates.
-- [ ] Post-write verification re-reads controller state and reports unapplied
-  fields rather than calling a 200 response proof of success.
+- [~] Compatibility CRUD names use manifest-backed schemas; identified PUT updates use fetch-merge-write and read-back mismatch reporting. Remaining controller-specific route behaviour is surfaced explicitly.
+- [x] Preview and confirmed identified PUT updates use fetch-merge-write for partial updates.
+- [x] Post-write verification re-reads identified PUT targets and reports unapplied fields; command-style operations explicitly report when stable read-back is unavailable.
 - [ ] Add write policy gates and permission-mode configuration compatible with
   upstream's confirmation model.
 
@@ -163,8 +157,7 @@ preview, confirmed request shape, and failed post-write verification.
   and backup lifecycle writes.
 - [ ] Switch port aggregation, port mirroring, STP, jumbo frames, and PoE power
   cycle.
-- [ ] Controller-version capability detection and actionable unsupported-feature
-  responses across both legacy and Integration API routes.
+- [x] Unsupported legacy and Integration API routes return actionable controller capability errors.
 
 Acceptance: API-key and session-auth requirements are explicit; controller ID
 families cannot be silently mixed; destructive operations remain previewed.

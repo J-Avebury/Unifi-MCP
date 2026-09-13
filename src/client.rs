@@ -121,6 +121,11 @@ impl UnifiClient {
                 delay *= 2;
                 continue;
             }
+            if status == StatusCode::NOT_FOUND {
+                bail!(
+                    "Legacy UniFi Network endpoint '{endpoint}' is not supported by this controller version or enabled feature set"
+                );
+            }
             let mut value = parse_json_response(status, text)?;
             if redact_response && self.redact_sensitive_fields {
                 redact_sensitive(&mut value);

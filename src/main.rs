@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use std::{
     borrow::Cow,
     env, fs,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
@@ -2282,7 +2282,9 @@ impl UnifiMcp {
         args: &Map<String, Value>,
     ) -> Result<Value> {
         let mut endpoint = endpoint_template.to_owned();
-        let identifier = id_arg.map(|key| required_string(args, key)).transpose()?;
+        let identifier = id_arg
+            .map(|key| required_compatibility_identifier(args, key))
+            .transpose()?;
         if let Some(identifier) = identifier {
             endpoint = endpoint.replace("{id}", identifier);
         }
@@ -2302,19 +2304,7 @@ impl UnifiMcp {
                 )
                 .await;
         }
-        let mut body = args
-            .get("body")
-            .cloned()
-            .unwrap_or_else(|| Value::Object(args.clone()));
-        if let Value::Object(object) = &mut body {
-            object.remove("confirm");
-            object.remove("body");
-            if let Some(identifier) = identifier
-                && id_arg.is_some_and(|key| key == "mac_address")
-            {
-                object.insert("mac".into(), Value::String(identifier.to_owned()));
-            }
-        }
+        let body = compatibility_payload(args);
         let mut preview_body = body.clone();
         redact_sensitive(&mut preview_body);
         let preview = json!({
@@ -2333,13 +2323,49 @@ impl UnifiMcp {
         {
             return Ok(json!({"preview": preview, "requires_confirmation": true}));
         }
+
+        let merge_write = matches!(method, CompatibilityMethod::Put)
+            && id_arg.is_some()
+            && endpoint_template.contains("{id}");
+        let request_body = if merge_write {
+            let current = self
+                .unifi
+                .network_request(Method::GET, &endpoint, None)
+                .await?;
+            let mut merged = Value::Object(write_object_from_response(current)?);
+            deep_merge(&mut merged, &body);
+            merged
+        } else {
+            body.clone()
+        };
         let response = self
             .unifi
-            .network_request(request_method, &endpoint, Some(body))
+            .network_request(request_method, &endpoint, Some(request_body))
             .await?;
-        Ok(
-            json!({"confirmed": true, "preview": preview, "controller_response": truncate_payload(response, 10)}),
-        )
+
+        let verification = if merge_write {
+            let readback = self
+                .unifi
+                .network_request(Method::GET, &endpoint, None)
+                .await?;
+            let actual = write_object_from_response(readback)?;
+            let mismatches = value_mismatches(&body, &actual, "");
+            json!({
+                "status": if mismatches.is_empty() { "verified" } else { "mismatch" },
+                "mismatches": mismatches,
+            })
+        } else {
+            json!({
+                "status": "not_available",
+                "reason": "This legacy command has no stable read-back route; the controller response is returned without treating HTTP success as proof of applied state.",
+            })
+        };
+        Ok(json!({
+            "confirmed": true,
+            "preview": preview,
+            "controller_response": truncate_payload(response, 10),
+            "verification": verification,
+        }))
     }
 }
 
@@ -2530,45 +2556,193 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             schema(properties, &required)
         }
     };
+    let manifest = if matches!(spec.kind, ToolKind::Compatibility { .. }) {
+        manifest_tool(spec.name)
+    } else {
+        None
+    };
+    let input_schema = if matches!(spec.kind, ToolKind::Compatibility { .. }) {
+        manifest
+            .and_then(|tool| tool.get("schema"))
+            .and_then(|schema| schema.get("input"))
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or(input_schema)
+    } else {
+        input_schema
+    };
+    let title = manifest
+        .and_then(|tool| tool.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or(spec.title);
+    let description = manifest
+        .and_then(|tool| tool.get("description"))
+        .and_then(Value::as_str)
+        .unwrap_or(spec.description);
+    let default_read_only = !matches!(
+        spec.kind,
+        ToolKind::Action { .. }
+            | ToolKind::IntegrationWrite { .. }
+            | ToolKind::LegacyWlanUpdate
+            | ToolKind::Compatibility {
+                read_only: false,
+                ..
+            }
+    );
+    let default_destructive = matches!(
+        spec.kind,
+        ToolKind::Action {
+            destructive: true,
+            ..
+        } | ToolKind::IntegrationWrite { .. }
+            | ToolKind::LegacyWlanUpdate
+            | ToolKind::Compatibility {
+                destructive: true,
+                ..
+            }
+    );
+    let default_idempotent = match spec.kind {
+        ToolKind::Action { idempotent, .. } | ToolKind::Compatibility { idempotent, .. } => {
+            idempotent
+        }
+        ToolKind::IntegrationWrite { .. } | ToolKind::LegacyWlanUpdate => false,
+        _ => true,
+    };
+    let read_only = manifest.map_or(Some(default_read_only), |_| {
+        manifest_hint(manifest, "readOnlyHint").flatten()
+    });
+    let destructive = manifest.map_or(Some(default_destructive), |_| {
+        manifest_hint(manifest, "destructiveHint").flatten()
+    });
+    let idempotent = manifest.map_or(Some(default_idempotent), |_| {
+        manifest_hint(manifest, "idempotentHint").flatten()
+    });
+    let mut annotations = ToolAnnotations::with_title(title).open_world(false);
+    if let Some(value) = read_only {
+        annotations = annotations.read_only(value);
+    }
+    if let Some(value) = destructive {
+        annotations = annotations.destructive(value);
+    }
+    if let Some(value) = idempotent {
+        annotations = annotations.idempotent(value);
+    }
     Tool::new(
         Cow::Borrowed(spec.name),
-        Cow::Borrowed(spec.description),
+        Cow::Borrowed(description),
         Arc::new(input_schema),
     )
-    .with_title(spec.title)
-    .with_annotations(
-        ToolAnnotations::with_title(spec.title)
-            .read_only(!matches!(
-                spec.kind,
-                ToolKind::Action { .. }
-                    | ToolKind::IntegrationWrite { .. }
-                    | ToolKind::LegacyWlanUpdate
-                    | ToolKind::Compatibility {
-                        read_only: false,
-                        ..
-                    }
-            ))
-            .destructive(matches!(
-                spec.kind,
-                ToolKind::Action {
-                    destructive: true,
-                    ..
-                } | ToolKind::IntegrationWrite { .. }
-                    | ToolKind::LegacyWlanUpdate
-                    | ToolKind::Compatibility {
-                        read_only: false,
-                        ..
-                    }
-            ))
-            .idempotent(match spec.kind {
-                ToolKind::Action { idempotent, .. } => idempotent,
-                ToolKind::IntegrationWrite { .. } | ToolKind::LegacyWlanUpdate => false,
-                ToolKind::Compatibility { idempotent, .. } => idempotent,
-                _ => true,
-            })
-            .open_world(false),
-    )
+    .with_title(title)
+    .with_annotations(annotations)
 }
+fn required_compatibility_identifier<'a>(
+    args: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a str> {
+    let value = required_string(args, key)?;
+    if key.contains("mac") {
+        required_mac(args, key)?;
+    } else if value.contains('/') || value.contains('\\') || value == "." || value == ".." {
+        bail!("{key} must be a safe controller identifier");
+    }
+    Ok(value)
+}
+
+fn compatibility_payload(args: &Map<String, Value>) -> Value {
+    for key in [
+        "body",
+        "group_data",
+        "record_data",
+        "entry_data",
+        "policy_data",
+        "port_forward_data",
+        "qos_data",
+        "rule",
+        "update_data",
+        "filter_data",
+        "radio",
+        "port_overrides",
+    ] {
+        if let Some(value) = args.get(key) {
+            return value.clone();
+        }
+    }
+    let mut object = args.clone();
+    object.remove("confirm");
+    Value::Object(object)
+}
+
+fn write_object_from_response(response: Value) -> Result<Map<String, Value>> {
+    let payload = response.get("data").unwrap_or(&response);
+    payload
+        .as_object()
+        .cloned()
+        .context("compatibility write verification expected an object response")
+}
+
+fn deep_merge(base: &mut Value, patch: &Value) {
+    match (base, patch) {
+        (Value::Object(base), Value::Object(patch)) => {
+            for (key, value) in patch {
+                if let Some(existing) = base.get_mut(key) {
+                    deep_merge(existing, value);
+                } else {
+                    base.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        (base, patch) => *base = patch.clone(),
+    }
+}
+
+fn value_mismatches(expected: &Value, actual: &Map<String, Value>, path: &str) -> Vec<Value> {
+    let mut mismatches = Vec::new();
+    let Some(expected) = expected.as_object() else {
+        return mismatches;
+    };
+    for (key, expected_value) in expected {
+        let location = if path.is_empty() {
+            key.clone()
+        } else {
+            format!("{path}.{key}")
+        };
+        match actual.get(key) {
+            Some(Value::Object(actual_object)) if expected_value.is_object() => {
+                mismatches.extend(value_mismatches(expected_value, actual_object, &location));
+            }
+            Some(actual_value) if actual_value == expected_value => {}
+            Some(actual_value) => mismatches.push(
+                json!({"field": location, "expected": expected_value, "actual": actual_value}),
+            ),
+            None => mismatches
+                .push(json!({"field": location, "expected": expected_value, "actual": null})),
+        }
+    }
+    mismatches
+}
+
+fn manifest_tool(name: &str) -> Option<&'static Value> {
+    static MANIFEST: OnceLock<Value> = OnceLock::new();
+    MANIFEST
+        .get_or_init(|| {
+            serde_json::from_str(include_str!("../upstream_network_tools_manifest.json"))
+                .expect("checked-in upstream Network manifest must be valid JSON")
+        })
+        .get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+        })
+}
+
+fn manifest_hint(tool: Option<&Value>, key: &str) -> Option<Option<bool>> {
+    tool.and_then(|tool| tool.get("annotations"))
+        .and_then(|annotations| annotations.get(key))
+        .map(Value::as_bool)
+}
+
 fn schema(properties: Value, required: &[&str]) -> JsonObject {
     let mut object = Map::new();
     object.insert("type".into(), json!("object"));
@@ -3058,6 +3232,60 @@ mod tests {
         assert_eq!(required_mac(&args, "mac").unwrap(), "c0:d7:aa:b5:2a:06");
     }
     #[test]
+    fn upstream_compatibility_manifest_is_reconciled() {
+        let tools =
+            serde_json::from_str::<Value>(include_str!("../upstream_network_tools_manifest.json"))
+                .expect("manifest JSON")["tools"]
+                .as_array()
+                .cloned()
+                .expect("manifest tools");
+        assert_eq!(tools.len(), 194);
+        for manifest in tools {
+            let name = manifest["name"].as_str().expect("manifest name");
+            let spec = UnifiMcp::find_tool(name).expect("manifest tool is catalogued");
+            if !tools::is_compatibility(name) {
+                continue;
+            }
+            let model = tool_model(spec);
+            assert_eq!(
+                model.input_schema.as_ref(),
+                manifest["schema"]["input"]
+                    .as_object()
+                    .expect("manifest input schema")
+            );
+            let annotations = model.annotations.expect("tool annotations");
+            assert_eq!(
+                annotations.read_only_hint,
+                manifest["annotations"]["readOnlyHint"].as_bool(),
+                "{name}"
+            );
+            assert_eq!(
+                annotations.destructive_hint,
+                manifest["annotations"]["destructiveHint"].as_bool(),
+                "{name}"
+            );
+            assert_eq!(
+                annotations.idempotent_hint,
+                manifest["annotations"]["idempotentHint"].as_bool(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn compatibility_merge_and_identifier_guards() {
+        let mut current = json!({"name":"old","nested":{"keep":true,"change":1}});
+        deep_merge(&mut current, &json!({"nested":{"change":2}}));
+        assert_eq!(
+            current,
+            json!({"name":"old","nested":{"keep":true,"change":2}})
+        );
+        let mut args = Map::new();
+        args.insert("id".into(), json!("../../rest/networkconf"));
+        assert!(required_compatibility_identifier(&args, "id").is_err());
+    }
+
+    #[test]
     fn catalog_annotations_match_mutability() {
         for tool in tools::iter() {
             let model = tool_model(tool);
@@ -3072,7 +3300,7 @@ mod tests {
                         ..
                     }
             );
-            assert_eq!(annotations.read_only_hint, Some(!mutating));
+            assert_eq!(annotations.read_only_hint, Some(!mutating), "{}", tool.name);
             if let ToolKind::Action {
                 destructive,
                 idempotent,
