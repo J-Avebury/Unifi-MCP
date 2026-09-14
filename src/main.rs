@@ -2383,7 +2383,7 @@ impl UnifiMcp {
             bail!("body must be an object for this Integration API operation");
         }
         if let Some(body) = body.as_ref() {
-            Self::validate_integration_body(endpoint_template, body)?;
+            Self::validate_integration_body(method, endpoint_template, body)?;
         }
         let method_name = match method {
             IntegrationMethod::Post => "POST",
@@ -2442,7 +2442,11 @@ impl UnifiMcp {
         Ok(json!({"preview":preview,"confirmed":true,"data":data}))
     }
 
-    fn validate_integration_body(endpoint: &str, body: &Value) -> Result<()> {
+    fn validate_integration_body(
+        method: IntegrationMethod,
+        endpoint: &str,
+        body: &Value,
+    ) -> Result<()> {
         let object = body
             .as_object()
             .context("Integration API request body must be a JSON object")?;
@@ -2466,49 +2470,61 @@ impl UnifiMcp {
         }
 
         if endpoint == "firewall/policies" || endpoint.starts_with("firewall/policies/") {
-            for field in [
-                "action",
-                "destination",
-                "enabled",
-                "ipProtocolScope",
-                "loggingEnabled",
-                "name",
-                "source",
-            ] {
-                if !object.contains_key(field) {
+            if matches!(method, IntegrationMethod::Patch) {
+                if object.keys().any(|key| key != "loggingEnabled") {
                     bail!(
-                        "Integration firewall policy bodies require '{field}'. Use camelCase Integration fields; legacy matching_target/zone_id bodies are not accepted."
+                        "Integration firewall policy PATCH accepts only 'loggingEnabled'; use PUT for a complete policy body."
                     );
                 }
-            }
-            let action = object
-            .get("action")
-            .and_then(Value::as_object)
-            .context("Integration firewall policy 'action' must be an object such as {\"type\":\"BLOCK\"}")?;
-            if action.get("type").and_then(Value::as_str).is_none() {
-                bail!("Integration firewall policy 'action' requires a string 'type'");
-            }
-            for field in ["source", "destination"] {
-                let section = object
-                    .get(field)
+                if !object.contains_key("loggingEnabled") {
+                    bail!("Integration firewall policy PATCH requires 'loggingEnabled'");
+                }
+            } else {
+                for field in [
+                    "action",
+                    "destination",
+                    "enabled",
+                    "ipProtocolScope",
+                    "loggingEnabled",
+                    "name",
+                    "source",
+                ] {
+                    if !object.contains_key(field) {
+                        bail!(
+                            "Integration firewall policy bodies require '{field}'. Use camelCase Integration fields; legacy matching_target/zone_id bodies are not accepted."
+                        );
+                    }
+                }
+                let action = object
+                    .get("action")
                     .and_then(Value::as_object)
-                    .with_context(|| {
-                        format!("Integration firewall policy '{field}' must be an object")
-                    })?;
-                if section.get("zoneId").and_then(Value::as_str).is_none() {
-                    bail!(
-                        "Integration firewall policy '{field}' requires camelCase 'zoneId'; legacy 'zone_id' is not accepted"
-                    );
+                    .context("Integration firewall policy 'action' must be an object such as {\"type\":\"BLOCK\"}")?;
+                if action.get("type").and_then(Value::as_str).is_none() {
+                    bail!("Integration firewall policy 'action' requires a string 'type'");
                 }
-            }
-            if object
-                .get("ipProtocolScope")
-                .and_then(Value::as_object)
-                .and_then(|scope| scope.get("ipVersion"))
-                .and_then(Value::as_str)
-                .is_none()
-            {
-                bail!("Integration firewall policy 'ipProtocolScope' requires 'ipVersion'");
+                for field in ["source", "destination"] {
+                    let section =
+                        object
+                            .get(field)
+                            .and_then(Value::as_object)
+                            .with_context(|| {
+                                format!("Integration firewall policy '{field}' must be an object")
+                            })?;
+                    if section.get("zoneId").and_then(Value::as_str).is_none() {
+                        bail!(
+                            "Integration firewall policy '{field}' requires camelCase 'zoneId'; legacy 'zone_id' is not accepted"
+                        );
+                    }
+                }
+                if object
+                    .get("ipProtocolScope")
+                    .and_then(Value::as_object)
+                    .and_then(|scope| scope.get("ipVersion"))
+                    .and_then(Value::as_str)
+                    .is_none()
+                {
+                    bail!("Integration firewall policy 'ipProtocolScope' requires 'ipVersion'");
+                }
             }
         }
 
@@ -3908,6 +3924,7 @@ mod tests {
     #[test]
     fn integration_write_validation_rejects_legacy_network_body() {
         let error = UnifiMcp::validate_integration_body(
+            IntegrationMethod::Put,
             "networks/{id}",
             &json!({"update_data":{"network_isolation_enabled":true}}),
         )
@@ -3919,6 +3936,7 @@ mod tests {
     #[test]
     fn integration_write_validation_rejects_legacy_firewall_body() {
         let error = UnifiMcp::validate_integration_body(
+            IntegrationMethod::Post,
             "firewall/policies",
             &json!({
                 "name":"Block",
@@ -3936,6 +3954,7 @@ mod tests {
     #[test]
     fn integration_write_validation_accepts_official_firewall_body() {
         UnifiMcp::validate_integration_body(
+            IntegrationMethod::Post,
             "firewall/policies",
             &json!({
                 "name":"Block",
@@ -3946,6 +3965,16 @@ mod tests {
                 "source":{"zoneId":"source"},
                 "destination":{"zoneId":"destination"}
             }),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn integration_write_validation_accepts_firewall_patch_body() {
+        UnifiMcp::validate_integration_body(
+            IntegrationMethod::Patch,
+            "firewall/policies/{id}",
+            &json!({"loggingEnabled":true}),
         )
         .unwrap();
     }
