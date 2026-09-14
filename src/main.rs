@@ -215,14 +215,14 @@ macro_rules! integration_object {
         )
     };
 }
-macro_rules! integration_query {
+macro_rules! integration_read {
     ($name:expr, $title:expr, $category:expr, $endpoint:expr) => {
         spec!(
             $name,
             $title,
             $category,
             concat!("Read ", $title, " from the UniFi Network Integration API."),
-            ToolKind::IntegrationQuery {
+            ToolKind::IntegrationRead {
                 endpoint: $endpoint
             }
         )
@@ -353,7 +353,7 @@ enum ToolKind {
     IntegrationObject {
         endpoint: &'static str,
     },
-    IntegrationQuery {
+    IntegrationRead {
         endpoint: &'static str,
     },
     IntegrationWrite {
@@ -1264,13 +1264,19 @@ const BASE_TOOLS: &[ToolSpec] = &[
         "system",
         "v1/info"
     ),
-    integration_query!(
+    integration_read!(
+        "unifi_get_api_acl_rule_ordering",
+        "Official ACL Rule Ordering",
+        "acl",
+        "acl-rules/ordering"
+    ),
+    integration_read!(
         "unifi_get_api_firewall_policy_ordering",
         "Official Firewall Policy Ordering",
         "firewall",
         "firewall/policies/ordering"
     ),
-    integration_query!(
+    integration_read!(
         "unifi_get_firewall_policy_ordering",
         "Firewall Policy Ordering",
         "firewall",
@@ -1913,8 +1919,10 @@ impl UnifiMcp {
                     .integration_global_request(Method::GET, endpoint, 1, 0)
                     .await
             }
-            ToolKind::IntegrationQuery { endpoint } => {
-                self.integration_query(endpoint, &args).await
+            ToolKind::IntegrationRead { endpoint } => {
+                self.unifi
+                    .integration_request(Method::GET, endpoint, None)
+                    .await
             }
             ToolKind::IntegrationWrite {
                 method,
@@ -2434,31 +2442,6 @@ impl UnifiMcp {
             .await
     }
 
-    async fn integration_query(&self, endpoint: &str, args: &Map<String, Value>) -> Result<Value> {
-        let query = args
-            .get("query")
-            .and_then(Value::as_object)
-            .context("query must be an object")?;
-        let pairs = query
-            .iter()
-            .map(|(key, value)| {
-                let value = value
-                    .as_str()
-                    .map(ToOwned::to_owned)
-                    .or_else(|| Some(value.to_string()))
-                    .unwrap_or_default();
-                (key.clone(), value)
-            })
-            .collect::<Vec<_>>();
-        let pairs = pairs
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.clone()))
-            .collect::<Vec<_>>();
-        self.unifi
-            .integration_request_with_query(Method::GET, endpoint, None, &pairs)
-            .await
-    }
-
     async fn integration_list(
         &self,
         endpoint: &str,
@@ -2831,10 +2814,7 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             &[],
         ),
         ToolKind::IntegrationObject { .. } => schema(json!({}), &[]),
-        ToolKind::IntegrationQuery { .. } => schema(
-            json!({"query":{"type":"object","description":"Query parameters required by the official endpoint."}}),
-            &["query"],
-        ),
+        ToolKind::IntegrationRead { .. } => schema(json!({}), &[]),
         ToolKind::IntegrationWrite {
             id_arg,
             endpoint,
@@ -3744,6 +3724,8 @@ mod tests {
             assert!(UnifiMcp::find_tool(name).is_some(), "missing {name}");
         }
         for name in [
+            "unifi_get_api_acl_rule_ordering",
+            "unifi_get_firewall_policy_ordering",
             "unifi_list_switch_stacks",
             "unifi_get_switch_stack_details",
             "unifi_list_mc_lag_domains",

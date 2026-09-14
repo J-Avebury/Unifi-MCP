@@ -43,11 +43,11 @@ tested.
 
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
-| Official Network API 10.6.101 | 73 documented operations | 73 catalogue operations | Path/method coverage implemented | **Primary target** |
-| Secondary upstream Network names | 194 | 249 catalogue entries | 194/194 (100%) | Compatibility view |
+| Official Network API 10.4.57 | 73 documented operations | 74 catalogue entries (one ordering alias) | Path/method coverage implemented | **Primary target** |
+| Secondary upstream Network names | 194 | 250 catalogue entries | 194/194 (100%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 194 | 249 catalogue entries | 194/194 Network parity | Compatibility view |
+| Secondary upstream total names | 194 | 250 catalogue entries | 194/194 Network parity | Compatibility view |
 
 `unifi_raw_network_endpoint` and the documented Integration API aliases are Rust-specific additions; they are not counted against the 194-name upstream Network contract.
 
@@ -90,7 +90,7 @@ The compatibility catalogue is split into `src/tools/compatibility.rs` and uses 
   actions, connected-client actions, and pending-device inventory wired through
   the same confirmed Integration API boundary.
 - [x] Official API nested reads and query contract: adopted-device statistics,
-  network references, firewall-policy ordering queries, and device-port action
+  network references, firewall-policy and ACL ordering reads, and device-port action
   paths.
 - [x] Official API ordering and filtered-delete writes: firewall-policy order,
   ACL order, and hotspot voucher deletion with query/body preview support.
