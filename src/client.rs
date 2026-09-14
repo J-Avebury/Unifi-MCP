@@ -130,6 +130,9 @@ impl UnifiClient {
                     }
                     Err(error) => {
                         tracing::debug!(%error, endpoint, "cloud Network read failed; trying direct controller route");
+                        if !self.has_local_transport() {
+                            return Err(error);
+                        }
                     }
                 }
             } else {
@@ -260,6 +263,9 @@ impl UnifiClient {
                     }
                     Err(error) => {
                         tracing::debug!(%error, endpoint, "cloud Network v2 read failed; trying direct controller route");
+                        if !self.has_local_transport() {
+                            return Err(error);
+                        }
                     }
                 }
             } else {
@@ -341,6 +347,9 @@ impl UnifiClient {
                     }
                     Err(error) => {
                         tracing::debug!(%error, endpoint, "cloud Integration read failed; trying direct controller route");
+                        if !self.has_local_transport() {
+                            return Err(error);
+                        }
                     }
                 }
             } else {
@@ -416,6 +425,9 @@ impl UnifiClient {
                     }
                     Err(error) => {
                         tracing::debug!(%error, endpoint, "cloud global Integration read failed; trying direct controller route");
+                        if !self.has_local_transport() {
+                            return Err(error);
+                        }
                     }
                 }
             } else {
@@ -458,6 +470,7 @@ impl UnifiClient {
         if let Some(site_id) = cached.as_ref() {
             return Ok(site_id.clone());
         }
+        let mut cloud_discovery_failed = false;
         if let Some(cloud) = self
             .site_manager
             .as_ref()
@@ -473,9 +486,15 @@ impl UnifiClient {
                     return Ok(site_id);
                 }
                 Err(error) => {
+                    cloud_discovery_failed = true;
                     tracing::debug!(%error, "cloud Integration site discovery failed; trying direct controller route");
                 }
             }
+        }
+        if cloud_discovery_failed && self.api_key.is_none() {
+            bail!(
+                "Site Manager Integration site discovery is not supported; no direct Integration API key is configured"
+            )
         }
         let api_key = self
             .api_key
@@ -497,6 +516,10 @@ impl UnifiClient {
         *cached = Some(site_id.clone());
         Ok(site_id)
     }
+    fn has_local_transport(&self) -> bool {
+        self.api_key.is_some() || (self.username.is_some() && self.password.is_some())
+    }
+
     fn network_url(&self, endpoint: &str) -> Result<Url> {
         self.proxy_url_path(&format!(
             "network/api/s/{}/{}",
@@ -541,7 +564,10 @@ impl UnifiClient {
 
 fn is_capability_error(error: &anyhow::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
-    message.contains("not supported") || message.contains("requires unifi network integration api")
+    message.contains("not supported")
+        || message.contains("connector returned http 404")
+        || message.contains("integration api key is not configured")
+        || message.contains("requires unifi network integration api")
 }
 
 fn append_query(endpoint: &str, query: &[(&str, String)]) -> String {

@@ -2081,6 +2081,52 @@ impl UnifiMcp {
         )
     }
 
+    async fn local_dashboard(
+        &self,
+        history_seconds: u64,
+        aggregate_error: &anyhow::Error,
+    ) -> Result<Value> {
+        let health = self.dashboard_component("stat/health", None).await;
+        let devices = self
+            .dashboard_component("stat/device", Some(json!({"_limit":MAX_LIMIT})))
+            .await;
+        let clients = self
+            .dashboard_component("stat/sta", Some(json!({"_limit":MAX_LIMIT})))
+            .await;
+        let wlans = self
+            .dashboard_component("list/wlanconf", Some(json!({"_limit":MAX_LIMIT})))
+            .await;
+        let alarms = self
+            .dashboard_component("stat/alarm", Some(json!({"_limit":MAX_LIMIT})))
+            .await;
+        let events = self
+            .dashboard_component("stat/event", Some(json!({"_limit":MAX_LIMIT})))
+            .await;
+        Ok(json!({
+            "source": "local_aggregate",
+            "site": self.unifi.site,
+            "history_seconds": history_seconds,
+            "health": health,
+            "devices": devices,
+            "clients": clients,
+            "wlans": wlans,
+            "alarms": alarms,
+            "events": events,
+            "aggregated_route_error": aggregate_error.to_string(),
+        }))
+    }
+
+    async fn dashboard_component(&self, endpoint: &str, body: Option<Value>) -> Value {
+        match self
+            .unifi
+            .network_request(Method::GET, endpoint, body)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => json!({"error": error.to_string(), "endpoint": endpoint}),
+        }
+    }
+
     async fn special_read(
         &self,
         operation: SpecialReadOperation,
@@ -2115,7 +2161,13 @@ impl UnifiMcp {
                     .await
                 {
                     Ok(value) => Ok(value),
-                    Err(local_error) => self.site_manager_dashboard(&local_error).await,
+                    Err(local_error) => match self.site_manager_dashboard(&local_error).await {
+                        Ok(value) => Ok(value),
+                        Err(cloud_error) => {
+                            tracing::debug!(%cloud_error, "cloud dashboard fallback unavailable; aggregating supported local reads");
+                            self.local_dashboard(history, &local_error).await
+                        }
+                    },
                 }
             }
             SpecialReadOperation::RecentEvents => Ok(
@@ -2171,11 +2223,21 @@ impl UnifiMcp {
                 self.unifi.integration_or_v2_request(Method::POST, "system-log/critical", Some(json!({"timestampFrom":now-30*24*3_600_000,"timestampTo":now,"severities":["HIGH","VERY_HIGH"],"categories":["CLIENT_DEVICES","INTERNET_AND_WAN","POWER","SECURITY","UNIFI_DEVICES","SOFTWARE_UPDATES","UNIFI_ETHERNET_PORTS","VPN"],"type":"GENERAL","pageNumber":0,"pageSize":limit.min(100),"searchText":""}))).await
             }
             SpecialReadOperation::IpsEvents => {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
                 self.unifi
-                    .network_request(
+                    .integration_or_v2_request(
                         Method::POST,
-                        "stat/ips/event",
-                        Some(json!({"_limit":MAX_LIMIT})),
+                        "system-log/all",
+                        Some(json!({
+                            "timestampFrom": now - 24 * 3_600_000,
+                            "timestampTo": now,
+                            "severities": ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"],
+                            "categories": ["SECURITY"],
+                            "type": "GENERAL",
+                            "pageNumber": 0,
+                            "pageSize": MAX_LIMIT.min(100),
+                            "searchText": ""
+                        })),
                     )
                     .await
             }

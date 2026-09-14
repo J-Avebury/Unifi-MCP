@@ -107,22 +107,23 @@ The compatibility catalogue is split into `src/tools/compatibility.rs` and uses 
   and `offset` inputs and preserve the selected page in their response.
 - [x] Formatting, strict Clippy, unit tests, release build, and live
   read-only-controller smoke tests. The latest matrix covered all 59 manifest
-  read-only tools with no required inputs: 55 succeeded; four returned explicit
-  capability errors because this controller does not expose those routes.
+  read-only tools with no required inputs: 58 succeeded; batch status remains an
+  explicit capability error because this controller exposes no batch-status route
+  and this MCP executes batches synchronously.
 
 ## Network parity backlog
 
 ### N1 — legacy compatibility diagnostics (not part of the official API baseline)
 
-- [x] **N1a — control-plane compatibility routes:** batch status, event subscription, alarm archiving, backup lifecycle, gateway/SNMP settings, and device control names are catalogued in the compatibility module; route support remains controller-dependent.
+- [~] **N1a — control-plane compatibility routes:** batch status, event subscription, alarm archiving, backup lifecycle, gateway/SNMP settings, and device control names are catalogued in the compatibility module; batch status remains unsupported because the controller exposes no route and this MCP executes batches synchronously.
 - [x] **N1b — client analytics (4):** client statistics, sessions, Wi-Fi
   details, and per-client DPI traffic.
 - [x] **N1c — device/switch/radio diagnostics (9):** device radio data, LLDP
   neighbours, PDU outlets, port statistics, RF-scan results, speed-test
   status, switch capabilities, switch ports, and available channels.
-- [~] **N1d — events and traffic telemetry (5):** event types, IPS events,
-  traffic-flow statistics, and traffic flows are catalogued; event subscription
-  remains pending.
+- [x] **N1d — events and traffic telemetry (5):** event types, IPS events,
+  traffic-flow statistics, and traffic flows are catalogued and live-tested via
+  current system-log and v2 equivalents; event subscription remains pending.
 
 Acceptance: each tool has an upstream-compatible name, schema, annotation,
 success/error envelope, bounded output, unit coverage, and a read-only live
