@@ -28,11 +28,19 @@ body such as `source.zone_id`, `destination.zone_id`, and `network_ids` into a
 legacy rule by guesswork. Supply a controller-compatible legacy rule body
 instead.
 
-Likewise, `unifi_update_network` remains the official Integration API tool. If
-the controller returns HTTP 400 for that route, use the explicit legacy
-network tool rather than relying on an automatic cross-route write fallback.
-This preserves the requested route contract and avoids applying a subtly
-wrong configuration model.
+Likewise, `unifi_update_network` remains the official Integration API tool.
+It requires the full camelCase Network create/update schema; legacy fields such
+as `update_data`, `network_isolation_enabled`, and `upnp_lan_enabled` are
+rejected before a connector request is made. If the desired change uses those
+legacy fields, use the explicit legacy network tool rather than relying on an
+automatic cross-route write fallback. This preserves the requested route
+contract and avoids applying a subtly wrong configuration model.
+
+The official Integration firewall-policy tool likewise requires the v10.4.57
+shape: an action object such as `{ "type": "BLOCK" }`, `zoneId`,
+`ipProtocolScope`, and `loggingEnabled`. The MCP rejects legacy fields such as
+`matching_target`, `matching_target_type`, and `zone_id` locally instead of
+sending a request that the controller will reject.
 
 Always preview first, inspect the generated route and redacted body, then
 confirm only after checking the target site and identifiers.

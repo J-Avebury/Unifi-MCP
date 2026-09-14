@@ -2382,6 +2382,9 @@ impl UnifiMcp {
         if body_required && body.as_ref().and_then(Value::as_object).is_none() {
             bail!("body must be an object for this Integration API operation");
         }
+        if let Some(body) = body.as_ref() {
+            Self::validate_integration_body(endpoint_template, body)?;
+        }
         let method_name = match method {
             IntegrationMethod::Post => "POST",
             IntegrationMethod::Put => "PUT",
@@ -2437,6 +2440,79 @@ impl UnifiMcp {
             .integration_request_with_query(request_method, &endpoint, body, &query)
             .await?;
         Ok(json!({"preview":preview,"confirmed":true,"data":data}))
+    }
+
+    fn validate_integration_body(endpoint: &str, body: &Value) -> Result<()> {
+        let object = body
+            .as_object()
+            .context("Integration API request body must be a JSON object")?;
+
+        if endpoint.starts_with("networks") {
+            if object.contains_key("update_data")
+                || object.contains_key("network_isolation_enabled")
+                || object.contains_key("upnp_lan_enabled")
+            {
+                bail!(
+                    "This is a legacy network configuration body. Use unifi_update_legacy_network with update_data; the Integration network endpoint requires the full camelCase network schema."
+                );
+            }
+            for field in ["enabled", "management", "name", "vlanId"] {
+                if !object.contains_key(field) {
+                    bail!(
+                        "Integration network bodies require '{field}'. This endpoint is a full network create/update contract, not a partial update."
+                    );
+                }
+            }
+        }
+
+        if endpoint == "firewall/policies" || endpoint.starts_with("firewall/policies/") {
+            for field in [
+                "action",
+                "destination",
+                "enabled",
+                "ipProtocolScope",
+                "loggingEnabled",
+                "name",
+                "source",
+            ] {
+                if !object.contains_key(field) {
+                    bail!(
+                        "Integration firewall policy bodies require '{field}'. Use camelCase Integration fields; legacy matching_target/zone_id bodies are not accepted."
+                    );
+                }
+            }
+            let action = object
+            .get("action")
+            .and_then(Value::as_object)
+            .context("Integration firewall policy 'action' must be an object such as {\"type\":\"BLOCK\"}")?;
+            if action.get("type").and_then(Value::as_str).is_none() {
+                bail!("Integration firewall policy 'action' requires a string 'type'");
+            }
+            for field in ["source", "destination"] {
+                let section = object
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .with_context(|| {
+                        format!("Integration firewall policy '{field}' must be an object")
+                    })?;
+                if section.get("zoneId").and_then(Value::as_str).is_none() {
+                    bail!(
+                        "Integration firewall policy '{field}' requires camelCase 'zoneId'; legacy 'zone_id' is not accepted"
+                    );
+                }
+            }
+            if object
+                .get("ipProtocolScope")
+                .and_then(Value::as_object)
+                .and_then(|scope| scope.get("ipVersion"))
+                .and_then(Value::as_str)
+                .is_none()
+            {
+                bail!("Integration firewall policy 'ipProtocolScope' requires 'ipVersion'");
+            }
+        }
+
+        Ok(())
     }
 
     async fn legacy_wlan_update(&self, args: &Map<String, Value>) -> Result<Value> {
@@ -3829,6 +3905,51 @@ mod tests {
             assert_eq!(schema["properties"]["confirm"]["type"], "boolean");
         }
     }
+    #[test]
+    fn integration_write_validation_rejects_legacy_network_body() {
+        let error = UnifiMcp::validate_integration_body(
+            "networks/{id}",
+            &json!({"update_data":{"network_isolation_enabled":true}}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("unifi_update_legacy_network"));
+    }
+
+    #[test]
+    fn integration_write_validation_rejects_legacy_firewall_body() {
+        let error = UnifiMcp::validate_integration_body(
+            "firewall/policies",
+            &json!({
+                "name":"Block",
+                "action":"BLOCK",
+                "enabled":true,
+                "source":{"zone_id":"source"},
+                "destination":{"zone_id":"destination"}
+            }),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ipProtocolScope"));
+    }
+
+    #[test]
+    fn integration_write_validation_accepts_official_firewall_body() {
+        UnifiMcp::validate_integration_body(
+            "firewall/policies",
+            &json!({
+                "name":"Block",
+                "action":{"type":"BLOCK"},
+                "enabled":true,
+                "loggingEnabled":false,
+                "ipProtocolScope":{"ipVersion":"IPV4_AND_IPV6"},
+                "source":{"zoneId":"source"},
+                "destination":{"zoneId":"destination"}
+            }),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn integration_site_selection_uses_matching_legacy_site() {
         let payload = json!({"data":[
