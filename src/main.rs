@@ -30,6 +30,7 @@ use tokio::sync::Mutex;
 use tower_service::Service;
 
 mod client;
+mod integration_schema;
 mod legacy;
 mod site_manager;
 mod tools;
@@ -1812,6 +1813,13 @@ impl UnifiMcp {
         {
             return error_envelope("Meta-tools cannot recursively execute other meta-tools");
         }
+        if matches!(spec.kind, ToolKind::IntegrationWrite { .. }) {
+            let schema = Value::Object(tool_model(spec).input_schema.as_ref().clone());
+            if let Err(error) = integration_schema::validate(&schema, &Value::Object(args.clone()))
+            {
+                return error_envelope(error.to_string());
+            }
+        }
         match self.run(spec, args).await {
             Ok(data) => success_envelope(data),
             Err(err) => error_envelope(format!("Failed to run {name}: {err}")),
@@ -2382,8 +2390,10 @@ impl UnifiMcp {
         if body_required && body.as_ref().and_then(Value::as_object).is_none() {
             bail!("body must be an object for this Integration API operation");
         }
-        if let Some(body) = body.as_ref() {
-            Self::validate_integration_body(method, endpoint_template, body)?;
+        if let Some(body) = body.as_ref()
+            && let Some(schema) = integration_schema::body(method, endpoint_template)
+        {
+            integration_schema::validate(&schema, body)?;
         }
         let method_name = match method {
             IntegrationMethod::Post => "POST",
@@ -2439,96 +2449,9 @@ impl UnifiMcp {
             .unifi
             .integration_request_with_query(request_method, &endpoint, body, &query)
             .await?;
-        Ok(json!({"preview":preview,"confirmed":true,"data":data}))
-    }
-
-    fn validate_integration_body(
-        method: IntegrationMethod,
-        endpoint: &str,
-        body: &Value,
-    ) -> Result<()> {
-        let object = body
-            .as_object()
-            .context("Integration API request body must be a JSON object")?;
-
-        if endpoint.starts_with("networks") {
-            if object.contains_key("update_data")
-                || object.contains_key("network_isolation_enabled")
-                || object.contains_key("upnp_lan_enabled")
-            {
-                bail!(
-                    "This is a legacy network configuration body. Use unifi_update_legacy_network with update_data; the Integration network endpoint requires the full camelCase network schema."
-                );
-            }
-            for field in ["enabled", "management", "name", "vlanId"] {
-                if !object.contains_key(field) {
-                    bail!(
-                        "Integration network bodies require '{field}'. This endpoint is a full network create/update contract, not a partial update."
-                    );
-                }
-            }
-        }
-
-        if endpoint == "firewall/policies" || endpoint.starts_with("firewall/policies/") {
-            if matches!(method, IntegrationMethod::Patch) {
-                if object.keys().any(|key| key != "loggingEnabled") {
-                    bail!(
-                        "Integration firewall policy PATCH accepts only 'loggingEnabled'; use PUT for a complete policy body."
-                    );
-                }
-                if !object.contains_key("loggingEnabled") {
-                    bail!("Integration firewall policy PATCH requires 'loggingEnabled'");
-                }
-            } else {
-                for field in [
-                    "action",
-                    "destination",
-                    "enabled",
-                    "ipProtocolScope",
-                    "loggingEnabled",
-                    "name",
-                    "source",
-                ] {
-                    if !object.contains_key(field) {
-                        bail!(
-                            "Integration firewall policy bodies require '{field}'. Use camelCase Integration fields; legacy matching_target/zone_id bodies are not accepted."
-                        );
-                    }
-                }
-                let action = object
-                    .get("action")
-                    .and_then(Value::as_object)
-                    .context("Integration firewall policy 'action' must be an object such as {\"type\":\"BLOCK\"}")?;
-                if action.get("type").and_then(Value::as_str).is_none() {
-                    bail!("Integration firewall policy 'action' requires a string 'type'");
-                }
-                for field in ["source", "destination"] {
-                    let section =
-                        object
-                            .get(field)
-                            .and_then(Value::as_object)
-                            .with_context(|| {
-                                format!("Integration firewall policy '{field}' must be an object")
-                            })?;
-                    if section.get("zoneId").and_then(Value::as_str).is_none() {
-                        bail!(
-                            "Integration firewall policy '{field}' requires camelCase 'zoneId'; legacy 'zone_id' is not accepted"
-                        );
-                    }
-                }
-                if object
-                    .get("ipProtocolScope")
-                    .and_then(Value::as_object)
-                    .and_then(|scope| scope.get("ipVersion"))
-                    .and_then(Value::as_str)
-                    .is_none()
-                {
-                    bail!("Integration firewall policy 'ipProtocolScope' requires 'ipVersion'");
-                }
-            }
-        }
-
-        Ok(())
+        Ok(
+            json!({"preview":preview,"confirmed":true,"data":data,"verification":{"status":"not_performed","reason":"Read back the target before claiming the requested state was applied."}}),
+        )
     }
 
     async fn legacy_wlan_update(&self, args: &Map<String, Value>) -> Result<Value> {
@@ -2726,7 +2649,7 @@ impl UnifiMcp {
                     .await
             };
         }
-        let body = compatibility_payload(args);
+        let body = normalize_compatibility_body(endpoint_template, compatibility_payload(args))?;
         let mut preview_body = body.clone();
         redact_sensitive(&mut preview_body);
         let preview = json!({
@@ -2808,7 +2731,7 @@ impl UnifiMcp {
 
 impl ServerHandler for UnifiMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions("Rust UniFi Network MCP with upstream-compatible discovery, response envelopes, and read-only diagnostics.")
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions("Use tools/list input schemas as the request contract. Integration tools accept body, not policy_data or update_data. Discover and preserve exact console, site, zone and network identifiers; never invent or splice identifiers. Preview before an authorised write. A preview validates syntax but does not establish controller acceptance or target identity. Read back after writes; HTTP success alone is not verified state. Do not switch to legacy LAN_IN rules merely because an Integration body fails validation. Legacy network updates accept flat body fields or update_data. Never retry an ambiguous write automatically.")
     }
     async fn list_tools(
         &self,
@@ -2981,6 +2904,7 @@ fn tool_model(spec: &ToolSpec) -> Tool {
         ToolKind::IntegrationObject { .. } => schema(json!({}), &[]),
         ToolKind::IntegrationRead { .. } => schema(json!({}), &[]),
         ToolKind::IntegrationWrite {
+            method,
             id_arg,
             endpoint,
             body_required,
@@ -2993,7 +2917,10 @@ fn tool_model(spec: &ToolSpec) -> Tool {
                 "port_index": {"type":"integer","minimum":0}
             });
             if let Some(id_arg) = id_arg {
-                properties[id_arg] = json!({"type":"string"});
+                properties[id_arg] = json!({"type":"string","format":"uuid"});
+            }
+            if let Some(body_schema) = integration_schema::body(method, endpoint) {
+                properties["body"] = body_schema;
             }
             let mut required = Vec::new();
             if let Some(id_arg) = id_arg {
@@ -3025,7 +2952,10 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             &[id_arg],
         ),
         ToolKind::Compatibility {
-            id_arg, read_only, ..
+            id_arg,
+            read_only,
+            endpoint,
+            ..
         } => {
             let mut properties = json!({
                 "body": {"type":"object","description":"Controller fields for this compatibility operation."},
@@ -3033,6 +2963,12 @@ fn tool_model(spec: &ToolSpec) -> Tool {
             });
             if let Some(id_arg) = id_arg {
                 properties[id_arg] = json!({"type":"string"});
+            }
+            if endpoint == "rest/networkconf/{id}" {
+                properties["body"]["description"] = json!(
+                    "Flat legacy network fields. A sole update_data wrapper is accepted and removed before preview and merge."
+                );
+                properties["update_data"] = json!({"type":"object","description":"Legacy network fields to merge into the existing record; supply this OR body."});
             }
             let required = if read_only {
                 Vec::new()
@@ -3044,6 +2980,12 @@ fn tool_model(spec: &ToolSpec) -> Tool {
     };
     let manifest = manifest_tool(spec.name);
     let input_schema = manifest
+        .filter(|_| {
+            !matches!(
+                spec.kind,
+                ToolKind::IntegrationWrite { .. } | ToolKind::IntegrationRead { .. }
+            )
+        })
         .and_then(|tool| tool.get("schema"))
         .and_then(|schema| schema.get("input"))
         .and_then(Value::as_object)
@@ -3054,6 +2996,12 @@ fn tool_model(spec: &ToolSpec) -> Tool {
         .and_then(Value::as_str)
         .unwrap_or(spec.title);
     let description = manifest
+        .filter(|_| {
+            !matches!(
+                spec.kind,
+                ToolKind::IntegrationWrite { .. } | ToolKind::IntegrationRead { .. }
+            )
+        })
         .and_then(|tool| tool.get("description"))
         .and_then(Value::as_str)
         .unwrap_or(spec.description);
@@ -3126,6 +3074,21 @@ fn required_compatibility_identifier<'a>(
     Ok(value)
 }
 
+fn normalize_compatibility_body(endpoint: &str, mut body: Value) -> Result<Value> {
+    if endpoint == "rest/networkconf/{id}" {
+        if let Some(update) = body.get("update_data").cloned() {
+            if body.as_object().is_none_or(|o| o.len() != 1) || !update.is_object() {
+                bail!("Legacy network update_data must be an object without sibling fields");
+            }
+            body = update;
+        }
+        if !body.is_object() || body.as_object().is_some_and(|o| o.is_empty()) {
+            bail!("Legacy network update requires a non-empty object");
+        }
+    }
+    Ok(body)
+}
+
 fn compatibility_payload(args: &Map<String, Value>) -> Value {
     for key in [
         "body",
@@ -3152,6 +3115,14 @@ fn compatibility_payload(args: &Map<String, Value>) -> Value {
 
 fn write_object_from_response(response: Value) -> Result<Map<String, Value>> {
     let payload = response.get("data").unwrap_or(&response);
+    let payload = if let Some(rows) = payload.as_array() {
+        if rows.len() != 1 {
+            bail!("Expected exactly one record for write verification");
+        }
+        &rows[0]
+    } else {
+        payload
+    };
     payload
         .as_object()
         .cloned()
@@ -3720,6 +3691,34 @@ async fn serve_http(server: UnifiMcp) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn legacy_network_wrapper_is_unwrapped_before_merge_and_preview() {
+        let args = json!({"body":{"update_data":{"network_isolation_enabled":true,"upnp_lan_enabled":false}}});
+        let body = normalize_compatibility_body(
+            "rest/networkconf/{id}",
+            compatibility_payload(args.as_object().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            body,
+            json!({"network_isolation_enabled":true,"upnp_lan_enabled":false})
+        );
+        let mut current = Value::Object(
+            write_object_from_response(json!({"data":[{"name":"IoT","vlan":99}]})).unwrap(),
+        );
+        deep_merge(&mut current, &body);
+        assert_eq!(current["vlan"], 99);
+        assert_eq!(current["name"], "IoT");
+        assert!(current.get("update_data").is_none());
+        assert!(
+            normalize_compatibility_body(
+                "rest/networkconf/{id}",
+                json!({"update_data":{},"name":"other"})
+            )
+            .is_err()
+        );
+        assert!(write_object_from_response(json!({"data":[{},{}]})).is_err());
+    }
+    #[test]
     fn bounds_limits() {
         assert_eq!(bounded_limit(None), 100);
         assert_eq!(bounded_limit(Some(0)), 1);
@@ -3921,64 +3920,6 @@ mod tests {
             assert_eq!(schema["properties"]["confirm"]["type"], "boolean");
         }
     }
-    #[test]
-    fn integration_write_validation_rejects_legacy_network_body() {
-        let error = UnifiMcp::validate_integration_body(
-            IntegrationMethod::Put,
-            "networks/{id}",
-            &json!({"update_data":{"network_isolation_enabled":true}}),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("unifi_update_legacy_network"));
-    }
-
-    #[test]
-    fn integration_write_validation_rejects_legacy_firewall_body() {
-        let error = UnifiMcp::validate_integration_body(
-            IntegrationMethod::Post,
-            "firewall/policies",
-            &json!({
-                "name":"Block",
-                "action":"BLOCK",
-                "enabled":true,
-                "source":{"zone_id":"source"},
-                "destination":{"zone_id":"destination"}
-            }),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("ipProtocolScope"));
-    }
-
-    #[test]
-    fn integration_write_validation_accepts_official_firewall_body() {
-        UnifiMcp::validate_integration_body(
-            IntegrationMethod::Post,
-            "firewall/policies",
-            &json!({
-                "name":"Block",
-                "action":{"type":"BLOCK"},
-                "enabled":true,
-                "loggingEnabled":false,
-                "ipProtocolScope":{"ipVersion":"IPV4_AND_IPV6"},
-                "source":{"zoneId":"source"},
-                "destination":{"zoneId":"destination"}
-            }),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn integration_write_validation_accepts_firewall_patch_body() {
-        UnifiMcp::validate_integration_body(
-            IntegrationMethod::Patch,
-            "firewall/policies/{id}",
-            &json!({"loggingEnabled":true}),
-        )
-        .unwrap();
-    }
-
     #[test]
     fn integration_site_selection_uses_matching_legacy_site() {
         let payload = json!({"data":[

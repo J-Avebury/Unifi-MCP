@@ -60,7 +60,10 @@ impl SiteManagerClient {
             path = safe_path,
             "starting Site Manager connector request"
         );
-        let url = format!("https://api.ui.com/v1/connector/consoles/{console_id}/{safe_path}");
+        let url = format!(
+            "https://api.ui.com/v1/connector/consoles/{console_id}/{}",
+            path.trim_start_matches('/')
+        );
         let mut request = self
             .client
             .request(method, url)

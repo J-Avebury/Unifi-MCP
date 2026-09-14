@@ -69,12 +69,13 @@ versioned v2 equivalent where one is documented by the existing controller
 compatibility surface. Writes use the selected Integration route and are not
 silently retried through a different write contract.
 
-The generic `body` field remains intentionally open at the MCP boundary so the
-controller-version-specific schema can be passed through without lossy Rust
-reconstruction. The route, HTTP method, required identifiers, confirmation
-boundary, and post-write behaviour are implemented by the MCP. A body that is
-valid according to the official schema can therefore be previewed without
-being rewritten.
+The `body` field now advertises and validates the pinned official v10.4.57
+request schema before preview or submission. Unknown fields in declared
+objects are rejected deliberately. The compatibility manifest cannot override
+this contract with upstream Python wrappers. See [schema contracts](schema-contract.md)
+for identifier validation and verification limits. A valid preview is not
+evidence that the controller will accept the write or that an identifier
+belongs to the intended entity.
 
 This audit establishes route and transport parity; it does not claim that
 every v10.4.57 operation is enabled on every console. The configured

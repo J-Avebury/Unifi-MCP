@@ -18,3 +18,4 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 urlencoding = "2"
+jsonschema = { version = "0.56.0", default-features = false }

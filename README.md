@@ -9,7 +9,7 @@ This is a Rust MCP with stdio by default and authenticated Streamable HTTP for r
 The tool names and response contract target the official local UniFi Network
 API, implemented natively in Rust. The current release exposes 251 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors. Against the configured 10.6.101 controller, the latest non-mutating read smoke test covered 59 read tools: 58 succeeded and one returned an explicit capability error: batch status is not exposed by this controller and this MCP executes batches synchronously.
 
-The checked-in upstream Network manifest supplies exact compatibility schemas and annotations for the 194-name surface. Identified compatibility PUT updates fetch, merge, write, and verify the requested fields; command-style routes disclose when stable read-back is unavailable.
+The checked-in upstream Network manifest supplies compatibility metadata for the 194-name surface. Integration tools retain their route-specific Rust contracts; Integration write bodies use the pinned official v10.4.57 schema, not incompatible upstream wrappers. See [schema contracts](docs/schema-contract.md). Identified compatibility PUT updates fetch, merge, write, and verify the requested fields; command-style routes disclose when stable read-back is unavailable.
 
 The Integration API inventory tools resolve the controller's UUID site ID from
 the configured legacy site reference before making a request. They require an

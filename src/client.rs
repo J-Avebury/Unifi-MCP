@@ -196,7 +196,10 @@ impl UnifiClient {
                 "UniFi Network response"
             );
             let text = response.text().await?;
-            if matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504) && attempt < 2 {
+            if method == Method::GET
+                && matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+                && attempt < 2
+            {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
                 delay *= 2;
                 continue;
