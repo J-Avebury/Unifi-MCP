@@ -98,7 +98,7 @@ Server-specific variables take priority over shared `UNIFI_*` fallbacks.
 | `UNIFI_MCP_HTTP_ALLOWED_HOST` | `UNIFI_NETWORK_MCP_HTTP_ALLOWED_HOST` | No | bind address | Host header accepted by the Streamable HTTP server. |
 | `RUST_LOG` | | No | | Rust tracing filter, for example `info`. |
 
-The server accepts local controller credentials, Site Manager cloud credentials, or both. Cloud connector mode requires a console ID and can operate without a local controller URL. HTTP mode requires a bearer token and should normally be placed behind TLS or a private network. An API key takes precedence when both are
+The server accepts local controller credentials, Site Manager cloud credentials, or both. Cloud connector mode requires a console ID and can operate without a local controller URL. When both transports are configured, Site Manager is preferred for reads and the direct controller route is used as a read fallback; writes are never automatically retried through a second route. HTTP mode requires a bearer token and should normally be placed behind TLS or a private network. An API key takes precedence when both are
 configured. The server does not load `.env`
 files automatically. Put env values in the MCP client config, export them in the
 launcher, or point a supported secret variable at a trusted `*_FILE`.

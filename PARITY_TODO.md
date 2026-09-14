@@ -51,7 +51,7 @@ tested.
 
 `unifi_raw_network_endpoint` and the documented Integration API aliases are Rust-specific additions; they are not counted against the 194-name upstream Network contract.
 
-The compatibility catalogue is split into `src/tools/compatibility.rs` and uses the checked-in upstream manifest for exact compatibility input schemas and annotation hints. Identified PUT updates use fetch-merge-write and post-write field verification; command-style routes report when stable read-back is unavailable. Every unsupported legacy route returns an explicit capability error.
+The compatibility catalogue is split into `src/tools/compatibility.rs` and uses the checked-in upstream manifest for exact compatibility input schemas and annotation hints. Identified PUT updates use fetch-merge-write and post-write field verification; command-style routes report when stable read-back is unavailable. Every unsupported legacy route returns an explicit capability error. Site Manager connector reads are preferred when configured, with direct-controller fallback for read failures; mutations do not cross-retry after an ambiguous result.
 
 ## Completed
 

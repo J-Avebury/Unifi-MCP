@@ -112,21 +112,29 @@ impl UnifiClient {
             .as_ref()
             .filter(|client| client.has_console_id())
         {
-            let mut value = cloud
-                .connector_request(
-                    method,
-                    &format!(
-                        "proxy/network/api/s/{}/{}",
-                        self.site,
-                        endpoint.trim_start_matches('/')
-                    ),
-                    body,
-                )
-                .await?;
-            if redact_response && self.redact_sensitive_fields {
-                redact_sensitive(&mut value);
+            let cloud_endpoint = format!(
+                "proxy/network/api/s/{}/{}",
+                self.site,
+                endpoint.trim_start_matches('/')
+            );
+            if method == Method::GET {
+                match cloud
+                    .connector_request(method.clone(), &cloud_endpoint, body.clone())
+                    .await
+                {
+                    Ok(mut value) => {
+                        if redact_response && self.redact_sensitive_fields {
+                            redact_sensitive(&mut value);
+                        }
+                        return Ok(value);
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, endpoint, "cloud Network read failed; trying direct controller route");
+                    }
+                }
+            } else {
+                return cloud.connector_request(method, &cloud_endpoint, body).await;
             }
-            return Ok(value);
         }
         self.ensure_login().await?;
         let url = self.network_url(endpoint)?;
@@ -234,22 +242,29 @@ impl UnifiClient {
             .as_ref()
             .filter(|client| client.has_console_id())
         {
-            let cloud_endpoint = append_query(endpoint, query);
-            let mut value = cloud
-                .connector_request(
-                    method,
-                    &format!(
-                        "proxy/network/v2/api/site/{}/{}",
-                        self.site,
-                        cloud_endpoint.trim_start_matches('/')
-                    ),
-                    body,
-                )
-                .await?;
-            if self.redact_sensitive_fields {
-                redact_sensitive(&mut value);
+            let cloud_endpoint = format!(
+                "proxy/network/v2/api/site/{}/{}",
+                self.site,
+                append_query(endpoint, query).trim_start_matches('/')
+            );
+            if method == Method::GET {
+                match cloud
+                    .connector_request(method.clone(), &cloud_endpoint, body.clone())
+                    .await
+                {
+                    Ok(mut value) => {
+                        if self.redact_sensitive_fields {
+                            redact_sensitive(&mut value);
+                        }
+                        return Ok(value);
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, endpoint, "cloud Network v2 read failed; trying direct controller route");
+                    }
+                }
+            } else {
+                return cloud.connector_request(method, &cloud_endpoint, body).await;
             }
-            return Ok(value);
         }
         self.ensure_login().await?;
         let mut url = self.network_v2_url(endpoint)?;
@@ -309,21 +324,28 @@ impl UnifiClient {
             .filter(|client| client.has_console_id())
         {
             let site_id = self.integration_site().await?;
-            let cloud_endpoint = append_query(endpoint, query);
-            let mut value = cloud
-                .connector_request(
-                    method,
-                    &format!(
-                        "proxy/network/integration/v1/sites/{site_id}/{}",
-                        cloud_endpoint.trim_start_matches('/')
-                    ),
-                    body,
-                )
-                .await?;
-            if self.redact_sensitive_fields {
-                redact_sensitive(&mut value);
+            let cloud_endpoint = format!(
+                "proxy/network/integration/v1/sites/{site_id}/{}",
+                append_query(endpoint, query).trim_start_matches('/')
+            );
+            if method == Method::GET {
+                match cloud
+                    .connector_request(method.clone(), &cloud_endpoint, body.clone())
+                    .await
+                {
+                    Ok(mut value) => {
+                        if self.redact_sensitive_fields {
+                            redact_sensitive(&mut value);
+                        }
+                        return Ok(value);
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, endpoint, "cloud Integration read failed; trying direct controller route");
+                    }
+                }
+            } else {
+                return cloud.connector_request(method, &cloud_endpoint, body).await;
             }
-            return Ok(value);
         }
         if self.api_key.is_none() {
             bail!(
@@ -378,20 +400,27 @@ impl UnifiClient {
             .filter(|client| client.has_console_id())
         {
             let cloud_endpoint = format!(
-                "{}?limit={limit}&offset={offset}",
+                "proxy/network/integration/{}?limit={limit}&offset={offset}",
                 endpoint.trim_start_matches('/')
             );
-            let mut value = cloud
-                .connector_request(
-                    method,
-                    &format!("proxy/network/integration/{cloud_endpoint}"),
-                    None,
-                )
-                .await?;
-            if self.redact_sensitive_fields {
-                redact_sensitive(&mut value);
+            if method == Method::GET {
+                match cloud
+                    .connector_request(method.clone(), &cloud_endpoint, None)
+                    .await
+                {
+                    Ok(mut value) => {
+                        if self.redact_sensitive_fields {
+                            redact_sensitive(&mut value);
+                        }
+                        return Ok(value);
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, endpoint, "cloud global Integration read failed; trying direct controller route");
+                    }
+                }
+            } else {
+                return cloud.connector_request(method, &cloud_endpoint, None).await;
             }
-            return Ok(value);
         }
         let api_key = self.api_key.as_deref().context(
             "The UniFi Network Integration API requires UNIFI_NETWORK_API_KEY or UNIFI_API_KEY",
@@ -434,12 +463,19 @@ impl UnifiClient {
             .as_ref()
             .filter(|client| client.has_console_id())
         {
-            let payload = cloud
+            match cloud
                 .connector_request(Method::GET, "proxy/network/integration/v1/sites", None)
-                .await?;
-            let site_id = integration_site_id_from_payload(&payload, &self.site)?;
-            *cached = Some(site_id.clone());
-            return Ok(site_id);
+                .await
+            {
+                Ok(payload) => {
+                    let site_id = integration_site_id_from_payload(&payload, &self.site)?;
+                    *cached = Some(site_id.clone());
+                    return Ok(site_id);
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "cloud Integration site discovery failed; trying direct controller route");
+                }
+            }
         }
         let api_key = self
             .api_key
