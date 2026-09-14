@@ -402,6 +402,7 @@ enum SpecialReadOperation {
     TrafficFlows,
     TrafficFlowStatistics,
     Backups,
+    SiteManagerConsoles,
 }
 
 #[derive(Clone, Copy)]
@@ -453,6 +454,12 @@ const BASE_TOOLS: &[ToolSpec] = &[
         "system",
         "Return a compact Network dashboard with health, devices, clients, WLANs, alarms, and events.",
         ToolKind::Dashboard
+    ),
+    special_read!(
+        "unifi_list_site_manager_consoles",
+        "Site Manager Consoles",
+        "system",
+        SpecialReadOperation::SiteManagerConsoles
     ),
     list!(
         "unifi_get_network_health",
@@ -2141,6 +2148,68 @@ impl UnifiMcp {
         args: &Map<String, Value>,
     ) -> Result<Value> {
         match operation {
+            SpecialReadOperation::SiteManagerConsoles => {
+                let client = self
+                    .unifi
+                    .site_manager
+                    .as_ref()
+                    .context("Site Manager credentials are not configured")?;
+                let page_size = args
+                    .get("page_size")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(100)
+                    .clamp(1, 500) as usize;
+                let next_token = args.get("next_token").and_then(Value::as_str);
+                let payload = client.list_hosts(page_size, next_token).await?;
+                let query = args
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_ascii_lowercase);
+                let consoles = payload
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|row| {
+                        row.get("type")
+                            .and_then(Value::as_str)
+                            .is_none_or(|kind| kind.eq_ignore_ascii_case("console"))
+                    })
+                    .filter(|row| {
+                        query.as_ref().is_none_or(|query| {
+                            ["id", "name", "type", "ipAddress", "hardwareId"]
+                                .into_iter()
+                                .filter_map(|field| row.get(field).and_then(Value::as_str))
+                                .any(|value| value.to_ascii_lowercase().contains(query))
+                        })
+                    })
+                    .map(|row| {
+                        let mut selected = serde_json::Map::new();
+                        for field in [
+                            "id",
+                            "name",
+                            "type",
+                            "ipAddress",
+                            "hardwareId",
+                            "owner",
+                            "isBlocked",
+                        ] {
+                            if let Some(value) = row.get(field) {
+                                selected.insert(field.to_owned(), value.clone());
+                            }
+                        }
+                        Value::Object(selected)
+                    })
+                    .collect::<Vec<_>>();
+                Ok(json!({
+                    "consoles": consoles,
+                    "count": consoles.len(),
+                    "page_size": page_size,
+                    "next_token": payload.get("nextToken"),
+                }))
+            }
             SpecialReadOperation::BatchStatus => bail!(
                 "Batch status has no supported route on this controller; cmd/batch-status is not exposed"
             ),
@@ -2756,6 +2825,10 @@ fn special_read_schema(operation: SpecialReadOperation) -> JsonObject {
         ),
         SpecialReadOperation::TrafficFlowStatistics => schema(
             json!({"period":{"type":"string","enum":["HOUR","DAY","WEEK","MONTH"],"default":"DAY"},"top":{"type":"integer","minimum":1,"maximum":100,"default":10}}),
+            &[],
+        ),
+        SpecialReadOperation::SiteManagerConsoles => schema(
+            json!({"page_size":{"type":"integer","minimum":1,"maximum":500,"default":100},"next_token":{"type":"string"},"query":{"type":"string","description":"Filter the current page by console id, name, type, IP address, or hardware id."}}),
             &[],
         ),
         _ => schema(json!({}), &[]),
@@ -3724,6 +3797,7 @@ mod tests {
             assert!(UnifiMcp::find_tool(name).is_some(), "missing {name}");
         }
         for name in [
+            "unifi_list_site_manager_consoles",
             "unifi_get_api_acl_rule_ordering",
             "unifi_get_firewall_policy_ordering",
             "unifi_list_switch_stacks",

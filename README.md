@@ -7,7 +7,7 @@ This is a Rust MCP with stdio by default and authenticated Streamable HTTP for r
 ## Compatibility target
 
 The tool names and response contract target the official local UniFi Network
-API, implemented natively in Rust. The current release exposes 250 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors. Against the configured 10.6.101 controller, the latest non-mutating read smoke test covered 59 read tools: 58 succeeded and one returned an explicit capability error: batch status is not exposed by this controller and this MCP executes batches synchronously.
+API, implemented natively in Rust. The current release exposes 251 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors. Against the configured 10.6.101 controller, the latest non-mutating read smoke test covered 59 read tools: 58 succeeded and one returned an explicit capability error: batch status is not exposed by this controller and this MCP executes batches synchronously.
 
 The checked-in upstream Network manifest supplies exact compatibility schemas and annotations for the 194-name surface. Identified compatibility PUT updates fetch, merge, write, and verify the requested fields; command-style routes disclose when stable read-back is unavailable.
 
@@ -101,7 +101,7 @@ Server-specific variables take priority over shared `UNIFI_*` fallbacks.
 | `UNIFI_MCP_HTTP_ALLOWED_HOST` | `UNIFI_NETWORK_MCP_HTTP_ALLOWED_HOST` | No | bind address | Host header accepted by the Streamable HTTP server. |
 | `RUST_LOG` | | No | | Rust tracing filter, for example `info`. |
 
-The server accepts local controller credentials, Site Manager cloud credentials, or both. Cloud connector mode requires a console ID and can operate without a local controller URL. When both transports are configured, Site Manager is preferred for reads and the direct controller route is used as a read fallback; writes are never automatically retried through a second route. HTTP mode requires a bearer token and should normally be placed behind TLS or a private network. An API key takes precedence when both are
+The server accepts local controller credentials, Site Manager cloud credentials, or both. Use `unifi_list_site_manager_consoles` to discover permitted consoles with bounded pagination and filtering; when more than one is available, select one explicitly with `UNIFI_SITE_MANAGER_CONSOLE_ID`. Cloud connector mode can operate without a local controller URL. When both transports are configured, Site Manager is preferred for reads and the direct controller route is used as a read fallback; writes are never automatically retried through a second route. HTTP mode requires a bearer token and should normally be placed behind TLS or a private network. An API key takes precedence when both are
 configured. The server does not load `.env`
 files automatically. Put env values in the MCP client config, export them in the
 launcher, or point a supported secret variable at a trusted `*_FILE`.

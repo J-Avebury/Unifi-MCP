@@ -102,6 +102,19 @@ impl SiteManagerClient {
         self.get("https://api.ui.com/v1/sites").await
     }
 
+    pub(crate) async fn list_hosts(
+        &self,
+        page_size: usize,
+        next_token: Option<&str>,
+    ) -> Result<Value> {
+        let mut url = format!("https://api.ui.com/v1/hosts?pageSize={page_size}");
+        if let Some(next_token) = next_token {
+            url.push_str("&nextToken=");
+            url.push_str(&urlencoding::encode(next_token));
+        }
+        self.get(&url).await
+    }
+
     pub(crate) async fn isp_metrics(&self, metric_type: &str, duration: &str) -> Result<Value> {
         if !matches!(metric_type, "5m" | "1h") {
             bail!("Site Manager ISP metric type must be 5m or 1h");

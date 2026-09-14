@@ -43,11 +43,11 @@ tested.
 
 | Surface | Upstream tools | Rust tools | Exact-name parity | Status |
 | --- | ---: | ---: | ---: | --- |
-| Official Network API 10.4.57 | 73 documented operations | 74 catalogue entries (one ordering alias) | Path/method coverage implemented | **Primary target** |
-| Secondary upstream Network names | 194 | 250 catalogue entries | 194/194 (100%) | Compatibility view |
+| Official Network API 10.4.57 | 73 documented operations | 75 catalogue entries (one ordering alias plus console discovery) | Path/method coverage implemented | **Primary target** |
+| Secondary upstream Network names | 194 | 251 catalogue entries | 194/194 (100%) | Compatibility view |
 | Protect | 62 | 0 | 0/62 | Not started |
 | Access | 37 | 0 | 0/37 | Not started |
-| Secondary upstream total names | 194 | 250 catalogue entries | 194/194 Network parity | Compatibility view |
+| Secondary upstream total names | 194 | 251 catalogue entries | 194/194 Network parity | Compatibility view |
 
 `unifi_raw_network_endpoint` and the documented Integration API aliases are Rust-specific additions; they are not counted against the 194-name upstream Network contract.
 

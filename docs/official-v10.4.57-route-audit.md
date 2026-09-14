@@ -52,6 +52,15 @@ they are not modelled as query-object tools. The existing
 `unifi_get_firewall_policy_ordering` and `unifi_get_api_firewall_policy_ordering`
 names are aliases for the same official route.
 
+## Console discovery and selection
+
+`unifi_list_site_manager_consoles` queries the Site Manager host inventory with
+bounded `page_size`, `next_token`, and current-page `query` filtering. It
+returns only console summaries and the pagination token needed to continue.
+The MCP never silently chooses one console from a large inventory: set
+`UNIFI_SITE_MANAGER_CONSOLE_ID` to the selected `id`. A one-console setup can
+use that same explicit configuration without any special-case guessing.
+
 ## Routing and safety notes
 
 The site-scoped official tools use Integration-first routing. If a controller
