@@ -40,7 +40,6 @@ impl UnifiClient {
                     )
                 })
                 .transpose()?,
-            redact_sensitive_fields: config.redact_sensitive_fields,
         })
     }
     pub(crate) async fn ensure_login(&self) -> Result<()> {
@@ -126,7 +125,7 @@ impl UnifiClient {
                     .await
                 {
                     Ok(mut value) => {
-                        if redact_response && self.redact_sensitive_fields {
+                        if redact_response {
                             redact_sensitive(&mut value);
                         }
                         return Ok(value);
@@ -142,7 +141,11 @@ impl UnifiClient {
                     }
                 }
             } else {
-                return cloud.connector_request(method, &cloud_endpoint, body).await;
+                let mut value = cloud
+                    .connector_request(method, &cloud_endpoint, body)
+                    .await?;
+                redact_sensitive(&mut value);
+                return Ok(value);
             }
         }
         self.ensure_login().await?;
@@ -210,7 +213,7 @@ impl UnifiClient {
                 );
             }
             let mut value = parse_json_response(status, text)?;
-            if redact_response && self.redact_sensitive_fields {
+            if redact_response {
                 redact_sensitive(&mut value);
             }
             return Ok(value);
@@ -296,9 +299,7 @@ impl UnifiClient {
                     .await
                 {
                     Ok(mut value) => {
-                        if self.redact_sensitive_fields {
-                            redact_sensitive(&mut value);
-                        }
+                        redact_sensitive(&mut value);
                         return Ok(value);
                     }
                     Err(error) => {
@@ -312,7 +313,11 @@ impl UnifiClient {
                     }
                 }
             } else {
-                return cloud.connector_request(method, &cloud_endpoint, body).await;
+                let mut value = cloud
+                    .connector_request(method, &cloud_endpoint, body)
+                    .await?;
+                redact_sensitive(&mut value);
+                return Ok(value);
             }
         }
         self.ensure_login().await?;
@@ -345,9 +350,7 @@ impl UnifiClient {
             );
         }
         let mut value = parse_json_response(status, text)?;
-        if self.redact_sensitive_fields {
-            redact_sensitive(&mut value);
-        }
+        redact_sensitive(&mut value);
         Ok(value)
     }
 
@@ -383,9 +386,7 @@ impl UnifiClient {
                     .await
                 {
                     Ok(mut value) => {
-                        if self.redact_sensitive_fields {
-                            redact_sensitive(&mut value);
-                        }
+                        redact_sensitive(&mut value);
                         return Ok(value);
                     }
                     Err(error) => {
@@ -399,7 +400,11 @@ impl UnifiClient {
                     }
                 }
             } else {
-                return cloud.connector_request(method, &cloud_endpoint, body).await;
+                let mut value = cloud
+                    .connector_request(method, &cloud_endpoint, body)
+                    .await?;
+                redact_sensitive(&mut value);
+                return Ok(value);
             }
         }
         if self.api_key.is_none() {
@@ -437,9 +442,7 @@ impl UnifiClient {
             );
         }
         let mut value = parse_json_response(status, text)?;
-        if self.redact_sensitive_fields {
-            redact_sensitive(&mut value);
-        }
+        redact_sensitive(&mut value);
         Ok(value)
     }
     pub(crate) async fn integration_global_request(
@@ -464,9 +467,7 @@ impl UnifiClient {
                     .await
                 {
                     Ok(mut value) => {
-                        if self.redact_sensitive_fields {
-                            redact_sensitive(&mut value);
-                        }
+                        redact_sensitive(&mut value);
                         return Ok(value);
                     }
                     Err(error) => {
@@ -480,7 +481,11 @@ impl UnifiClient {
                     }
                 }
             } else {
-                return cloud.connector_request(method, &cloud_endpoint, None).await;
+                let mut value = cloud
+                    .connector_request(method, &cloud_endpoint, None)
+                    .await?;
+                redact_sensitive(&mut value);
+                return Ok(value);
             }
         }
         let api_key = self.api_key.as_deref().context(
@@ -509,9 +514,7 @@ impl UnifiClient {
             );
         }
         let mut value = parse_json_response(status, text)?;
-        if self.redact_sensitive_fields {
-            redact_sensitive(&mut value);
-        }
+        redact_sensitive(&mut value);
         Ok(value)
     }
     pub(crate) async fn integration_site(&self) -> Result<String> {

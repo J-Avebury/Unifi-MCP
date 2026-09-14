@@ -14,8 +14,7 @@ all projects.
       "env": {
         "UNIFI_SITE_MANAGER_API_KEY_FILE": "/secure/path/unifi-site-manager-api-key",
         "UNIFI_SITE_MANAGER_CONSOLE_ID": "<console-id>",
-        "UNIFI_NETWORK_SITE": "default",
-        "UNIFI_NETWORK_REDACT_SENSITIVE_FIELDS": "true"
+        "UNIFI_NETWORK_SITE": "default"
       }
     }
   }

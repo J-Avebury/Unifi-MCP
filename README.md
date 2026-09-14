@@ -91,7 +91,6 @@ Server-specific variables take priority over shared `UNIFI_*` fallbacks.
 | `UNIFI_NETWORK_PASSWORD_FILE` | `UNIFI_PASSWORD_FILE` | No | | File containing the local controller password. |
 | `UNIFI_NETWORK_VERIFY_SSL` | `UNIFI_VERIFY_SSL` | No | | Set to `false` for a local self-signed controller certificate. |
 | `UNIFI_NETWORK_INSECURE_TLS` | `UNIFI_INSECURE_TLS` | No | `false` | Alternative TLS flag when `*_VERIFY_SSL` is not set. |
-| `UNIFI_NETWORK_REDACT_SENSITIVE_FIELDS` | `UNIFI_REDACT_SENSITIVE_FIELDS` | No | `true` | Redacts known secret fields before MCP responses. |
 | `UNIFI_SITE_MANAGER_API_KEY_FILE` | `UNIFI_CLOUD_API_KEY_FILE` | Conditional | | Site Manager API key file for the api.ui.com console connector. |
 | `UNIFI_SITE_MANAGER_CONSOLE_ID` | `UNIFI_CLOUD_CONSOLE_ID` | Conditional | | Console ID used by the api.ui.com connector. |
 | `UNIFI_SITE_MANAGER_SITE_ID` | `UNIFI_CLOUD_SITE_ID` | No | | Optional Site Manager site ID for cloud dashboard metrics. |
@@ -106,7 +105,7 @@ configured. The server does not load `.env`
 files automatically. Put env values in the MCP client config, export them in the
 launcher, or point a supported secret variable at a trusted `*_FILE`.
 
-Known secret-bearing fields are redacted by default, including Wi-Fi
+Known secret-bearing fields are always redacted, including Wi-Fi
 passphrases, passwords, API keys, tokens, VPN key material, SNMP community
 strings, and device SSH credentials.
 
@@ -126,8 +125,8 @@ authorisation headers, request bodies, response bodies, or full request URLs.
 At `debug` and above it may record the HTTP method, logical endpoint, transport
 (`cloud` or `direct`), HTTP status, retry attempt, and elapsed milliseconds.
 These endpoint names may include site or object identifiers, so keep logs
-private. Errors returned to the MCP client are also passed through the normal
-response redaction layer where sensitive fields are enabled.
+private. Errors and controller responses returned to the MCP client are also
+passed through the mandatory response redaction layer.
 
 For a narrower diagnostic stream, use a target filter such as
 `RUST_LOG=unifi_mcp::http=debug,unifi_mcp=info`. Logs are written to stderr so

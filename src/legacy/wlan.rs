@@ -42,9 +42,7 @@ pub(crate) async fn update(mcp: &UnifiMcp, args: &Map<String, Value>) -> Result<
         "requires_confirmation": true,
     });
     let mut safe_preview = preview.clone();
-    if mcp.unifi.redact_sensitive_fields {
-        redact_sensitive(&mut safe_preview);
-    }
+    redact_sensitive(&mut safe_preview);
     if !args
         .get("confirm")
         .and_then(Value::as_bool)
@@ -78,9 +76,7 @@ pub(crate) async fn update(mcp: &UnifiMcp, args: &Map<String, Value>) -> Result<
         .filter_map(|(key, requested)| (after.get(key) != Some(requested)).then_some(key.clone()))
         .collect::<Vec<_>>();
     let mut safe_after = after;
-    if mcp.unifi.redact_sensitive_fields {
-        redact_sensitive(&mut safe_after);
-    }
+    redact_sensitive(&mut safe_after);
     if !mismatches.is_empty() {
         bail!(
             "WLAN update was sent but these fields did not persist: {}",

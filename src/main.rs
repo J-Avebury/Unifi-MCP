@@ -283,7 +283,6 @@ struct UnifiClient {
     authenticated: Arc<Mutex<bool>>,
     integration_site_id: Arc<Mutex<Option<String>>>,
     site_manager: Option<site_manager::SiteManagerClient>,
-    redact_sensitive_fields: bool,
 }
 
 struct UnifiConfig {
@@ -293,7 +292,6 @@ struct UnifiConfig {
     username: Option<String>,
     password: Option<String>,
     insecure_tls: bool,
-    redact_sensitive_fields: bool,
     site_manager_api_key: Option<String>,
     site_manager_site_id: Option<String>,
     site_manager_console_id: Option<String>,
@@ -2401,7 +2399,7 @@ impl UnifiMcp {
             IntegrationMethod::Patch => "PATCH",
             IntegrationMethod::Delete => "DELETE",
         };
-        let preview = json!({
+        let mut preview = json!({
             "method": method_name,
             "endpoint": endpoint,
             "target": identifier,
@@ -2410,6 +2408,7 @@ impl UnifiMcp {
             "destructive": true,
             "requires_confirmation": true,
         });
+        redact_sensitive(&mut preview);
         if !args
             .get("confirm")
             .and_then(Value::as_bool)
@@ -2445,10 +2444,11 @@ impl UnifiMcp {
             .iter()
             .map(|(key, value)| (key.as_str(), value.clone()))
             .collect::<Vec<_>>();
-        let data = self
+        let mut data = self
             .unifi
             .integration_request_with_query(request_method, &endpoint, body, &query)
             .await?;
+        redact_sensitive(&mut data);
         Ok(
             json!({"preview":preview,"confirmed":true,"data":data,"verification":{"status":"not_performed","reason":"Read back the target before claiming the requested state was applied."}}),
         )
@@ -2795,11 +2795,6 @@ impl UnifiConfig {
             } else {
                 parse_bool_env_pair("UNIFI_NETWORK_INSECURE_TLS", "UNIFI_INSECURE_TLS", false)?
             };
-        let redact_sensitive_fields = parse_bool_env_pair(
-            "UNIFI_NETWORK_REDACT_SENSITIVE_FIELDS",
-            "UNIFI_REDACT_SENSITIVE_FIELDS",
-            true,
-        )?;
         let site_manager_api_key =
             optional_secret_env_pair("UNIFI_SITE_MANAGER_API_KEY", "UNIFI_CLOUD_API_KEY")?;
         let site_manager_site_id = env_pair("UNIFI_SITE_MANAGER_SITE_ID", "UNIFI_CLOUD_SITE_ID");
@@ -2812,7 +2807,6 @@ impl UnifiConfig {
             username,
             password,
             insecure_tls,
-            redact_sensitive_fields,
             site_manager_api_key,
             site_manager_site_id,
             site_manager_console_id,

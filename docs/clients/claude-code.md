@@ -9,7 +9,6 @@ claude mcp add --scope user \\
   -e UNIFI_SITE_MANAGER_API_KEY_FILE=/secure/path/unifi-site-manager-api-key \\
   -e UNIFI_SITE_MANAGER_CONSOLE_ID=<console-id> \\
   -e UNIFI_NETWORK_SITE=default \\
-  -e UNIFI_NETWORK_REDACT_SENSITIVE_FIELDS=true \\
   unifi -- /absolute/path/to/Unifi-MCP/target/release/unifi-mcp
 ```
 
