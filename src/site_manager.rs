@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const CONNECTOR_TIMEOUT: Duration = Duration::from_secs(25);
 const MAX_CONNECTOR_BODY_BYTES: u64 = 10 * 1024 * 1024;
@@ -47,10 +47,20 @@ impl SiteManagerClient {
         let console_id = self.console_id.as_deref().context(
             "UNIFI_SITE_MANAGER_CONSOLE_ID is required for the api.ui.com console connector",
         )?;
-        let url = format!(
-            "https://api.ui.com/v1/connector/consoles/{console_id}/{}",
-            path.trim_start_matches('/')
+        let safe_path = path
+            .trim_start_matches('/')
+            .split('?')
+            .next()
+            .unwrap_or_default();
+        let request_method = method.clone();
+        let started = Instant::now();
+        tracing::debug!(
+            target: "unifi_mcp::http",
+            method = %request_method,
+            path = safe_path,
+            "starting Site Manager connector request"
         );
+        let url = format!("https://api.ui.com/v1/connector/consoles/{console_id}/{safe_path}");
         let mut request = self
             .client
             .request(method, url)
@@ -59,11 +69,28 @@ impl SiteManagerClient {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request
-            .send()
-            .await
-            .context("api.ui.com console connector request failed")?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    target: "unifi_mcp::http",
+                    method = %request_method,
+                    path = safe_path,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Site Manager connector request failed"
+                );
+                return Err(error).context("api.ui.com console connector request failed");
+            }
+        };
         let status = response.status();
+        tracing::info!(
+            target: "unifi_mcp::http",
+            method = %request_method,
+            path = safe_path,
+            status = status.as_u16(),
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "Site Manager connector response"
+        );
         let body = read_bounded_body(response, "api.ui.com console connector").await?;
         if !status.is_success() {
             bail!("api.ui.com console connector returned HTTP {status}");

@@ -61,6 +61,7 @@ The current Network endpoint allowlist is:
 - `rest/routing`
 - `rest/firewallgroup`
 - `rest/firewallrule`
+
 - `rest/portconf`
 - `rest/dynamicdns`
 - `list/usergroup`
@@ -68,6 +69,8 @@ The current Network endpoint allowlist is:
 - `get/setting`
 - `stat/sysinfo`
 - `stat/sitedpi`
+
+See [legacy controller writes](docs/legacy-controller-writes.md) for route and schema notes.
 
 ## Configuration
 
@@ -106,6 +109,29 @@ launcher, or point a supported secret variable at a trusted `*_FILE`.
 Known secret-bearing fields are redacted by default, including Wi-Fi
 passphrases, passwords, API keys, tokens, VPN key material, SNMP community
 strings, and device SSH credentials.
+
+## Logging and secret handling
+
+Logging is adjustable with the standard `RUST_LOG` filter. For example:
+
+```sh
+RUST_LOG=error   # failures only
+RUST_LOG=info    # request completion summaries and startup information
+RUST_LOG=debug   # route selection, fallback decisions, status, and latency
+RUST_LOG=trace   # very verbose diagnostics; use briefly when investigating
+```
+
+The logger deliberately does not emit API keys, passwords, bearer tokens,
+authorisation headers, request bodies, response bodies, or full request URLs.
+At `debug` and above it may record the HTTP method, logical endpoint, transport
+(`cloud` or `direct`), HTTP status, retry attempt, and elapsed milliseconds.
+These endpoint names may include site or object identifiers, so keep logs
+private. Errors returned to the MCP client are also passed through the normal
+response redaction layer where sensitive fields are enabled.
+
+For a narrower diagnostic stream, use a target filter such as
+`RUST_LOG=unifi_mcp::http=debug,unifi_mcp=info`. Logs are written to stderr so
+stdio MCP framing on stdout remains clean.
 
 ## Remote deployment
 

@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, bail};
 use reqwest::{Client, Method, StatusCode, Url};
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::Mutex;
 
 use crate::{
@@ -129,7 +132,10 @@ impl UnifiClient {
                         return Ok(value);
                     }
                     Err(error) => {
-                        tracing::debug!(%error, endpoint, "cloud Network read failed; trying direct controller route");
+                        tracing::debug!(
+                            endpoint,
+                            "cloud Network read failed; trying direct controller route"
+                        );
                         if !self.has_local_transport() {
                             return Err(error);
                         }
@@ -141,8 +147,18 @@ impl UnifiClient {
         }
         self.ensure_login().await?;
         let url = self.network_url(endpoint)?;
+        let safe_endpoint = endpoint.split('?').next().unwrap_or(endpoint);
         let mut delay = 100;
         for attempt in 0..3 {
+            let started = Instant::now();
+            tracing::debug!(
+                target: "unifi_mcp::http",
+                source = "direct",
+                method = %method,
+                endpoint = safe_endpoint,
+                attempt = attempt + 1,
+                "starting UniFi Network request"
+            );
             let mut request = self
                 .client
                 .request(method.clone(), url.clone())
@@ -153,11 +169,32 @@ impl UnifiClient {
             if let Some(body) = &body {
                 request = request.json(body);
             }
-            let response = request
-                .send()
-                .await
-                .context("UniFi Network request failed")?;
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "unifi_mcp::http",
+                        source = "direct",
+                        method = %method,
+                        endpoint = safe_endpoint,
+                        attempt = attempt + 1,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "UniFi Network request failed"
+                    );
+                    return Err(error).context("UniFi Network request failed");
+                }
+            };
             let status = response.status();
+            tracing::debug!(
+                target: "unifi_mcp::http",
+                source = "direct",
+                method = %method,
+                endpoint = safe_endpoint,
+                status = status.as_u16(),
+                attempt = attempt + 1,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "UniFi Network response"
+            );
             let text = response.text().await?;
             if matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504) && attempt < 2 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
@@ -262,7 +299,10 @@ impl UnifiClient {
                         return Ok(value);
                     }
                     Err(error) => {
-                        tracing::debug!(%error, endpoint, "cloud Network v2 read failed; trying direct controller route");
+                        tracing::debug!(
+                            endpoint,
+                            "cloud Network v2 read failed; trying direct controller route"
+                        );
                         if !self.has_local_transport() {
                             return Err(error);
                         }
@@ -346,7 +386,10 @@ impl UnifiClient {
                         return Ok(value);
                     }
                     Err(error) => {
-                        tracing::debug!(%error, endpoint, "cloud Integration read failed; trying direct controller route");
+                        tracing::debug!(
+                            endpoint,
+                            "cloud Integration read failed; trying direct controller route"
+                        );
                         if !self.has_local_transport() {
                             return Err(error);
                         }
@@ -424,7 +467,10 @@ impl UnifiClient {
                         return Ok(value);
                     }
                     Err(error) => {
-                        tracing::debug!(%error, endpoint, "cloud global Integration read failed; trying direct controller route");
+                        tracing::debug!(
+                            endpoint,
+                            "cloud global Integration read failed; trying direct controller route"
+                        );
                         if !self.has_local_transport() {
                             return Err(error);
                         }
@@ -485,9 +531,11 @@ impl UnifiClient {
                     *cached = Some(site_id.clone());
                     return Ok(site_id);
                 }
-                Err(error) => {
+                Err(_error) => {
                     cloud_discovery_failed = true;
-                    tracing::debug!(%error, "cloud Integration site discovery failed; trying direct controller route");
+                    tracing::debug!(
+                        "cloud Integration site discovery failed; trying direct controller route"
+                    );
                 }
             }
         }

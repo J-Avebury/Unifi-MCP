@@ -2163,8 +2163,10 @@ impl UnifiMcp {
                     Ok(value) => Ok(value),
                     Err(local_error) => match self.site_manager_dashboard(&local_error).await {
                         Ok(value) => Ok(value),
-                        Err(cloud_error) => {
-                            tracing::debug!(%cloud_error, "cloud dashboard fallback unavailable; aggregating supported local reads");
+                        Err(_cloud_error) => {
+                            tracing::debug!(
+                                "cloud dashboard fallback unavailable; aggregating supported local reads"
+                            );
                             self.local_dashboard(history, &local_error).await
                         }
                     },
@@ -3483,6 +3485,7 @@ fn is_sensitive_field(key: &str) -> bool {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_target(true)
         .with_writer(std::io::stderr)
         .init();
     let server = UnifiMcp::new(UnifiClient::new(UnifiConfig::from_env()?)?);
@@ -3526,7 +3529,7 @@ async fn serve_http(server: UnifiMcp) -> Result<()> {
     tracing::info!("MCP Streamable HTTP listening on {address}");
 
     loop {
-        let (stream, _) = listener.accept().await.context("MCP HTTP accept failed")?;
+        let (stream, peer) = listener.accept().await.context("MCP HTTP accept failed")?;
         let service = service.clone();
         let token = token.clone();
         tokio::spawn(async move {
@@ -3542,6 +3545,7 @@ async fn serve_http(server: UnifiMcp) -> Result<()> {
                         .and_then(|value| value.strip_prefix("Bearer "))
                         .is_some_and(|value| value == token);
                     if !authorised {
+                        tracing::warn!(target: "unifi_mcp::http", %peer, "unauthorised MCP HTTP request");
                         let body = Full::new(hyper::body::Bytes::from_static(b"unauthorized"))
                             .map_err(|never: Infallible| match never {})
                             .boxed();
@@ -3733,6 +3737,12 @@ mod tests {
     }
     #[test]
     fn official_network_switching_and_dns_surface_is_catalogued() {
+        for name in [
+            "unifi_create_legacy_firewall_rule",
+            "unifi_update_legacy_network",
+        ] {
+            assert!(UnifiMcp::find_tool(name).is_some(), "missing {name}");
+        }
         for name in [
             "unifi_list_switch_stacks",
             "unifi_get_switch_stack_details",
