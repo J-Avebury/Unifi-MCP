@@ -133,6 +133,22 @@ connector itself enforces its request timeout and response-size limits; this
 client also bounds its connector responses and reports unsupported routes
 explicitly.
 
+## Client installation guides
+
+This repository is currently source-only; it is not published to a package
+manager or marketplace. Build the binary locally, then follow the guide for
+your MCP client:
+
+- [Installation overview](docs/installation.md)
+- [Claude Desktop](docs/clients/claude-desktop.md)
+- [Claude Code](docs/clients/claude-code.md)
+- [Codex](docs/clients/codex.md)
+- [Cursor](docs/clients/cursor.md)
+- [VS Code](docs/clients/vscode.md)
+- [ChatGPT](docs/clients/chatgpt.md)
+- [Generic MCP clients](docs/clients/generic.md)
+- [Operator skill and native agent locations](docs/skills/unifi-network-operator/SKILL.md). Copies are installed in `.claude/skills/`, `.agents/skills/`, and `.github/skills/`; Cursor uses `.cursor/rules/`.
+
 ## Build
 
 ```sh

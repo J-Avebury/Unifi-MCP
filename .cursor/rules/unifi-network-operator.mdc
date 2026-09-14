@@ -1,0 +1,16 @@
+---
+description: Safe operating guidance for the UniFi Network MCP. Use when inspecting a UniFi controller, diagnosing network state, or changing Network configuration through this MCP.
+globs:
+alwaysApply: false
+---
+
+# UniFi Network MCP safety
+
+- Establish the intended site before calling tools; never substitute another site.
+- Start with read-only health and inventory tools, using the narrowest tool available.
+- Treat capability errors as real and report them clearly.
+- Preview every mutation first. Only repeat with `confirm: true` after explicit operator approval.
+- `unifi_batch` is bounded and read-only; never use it for writes.
+- Keep API keys, bearer tokens, passwords, VPN material, SNMP communities, and SSH credentials out of prompts and responses.
+- Do not automatically retry a write through another transport after a timeout or ambiguous result.
+- After confirmed writes, report the controller response and verification result.
