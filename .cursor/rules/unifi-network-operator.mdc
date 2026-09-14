@@ -7,8 +7,10 @@ alwaysApply: false
 # UniFi Network MCP safety
 
 - Establish the intended site before calling tools; never substitute another site.
+- If the cloud console is unknown, call `unifi_list_site_manager_consoles` and paginate/filter; never guess among multiple consoles.
 - Start with read-only health and inventory tools, using the narrowest tool available.
 - Treat capability errors as real and report them clearly.
+- Follow the current tool schema and official camelCase Integration payloads; use explicit legacy tools for legacy fields such as `update_data` or `zone_id`.
 - Preview every mutation first. Only repeat with `confirm: true` after explicit operator approval.
 - `unifi_batch` is bounded and read-only; never use it for writes.
 - Keep API keys, bearer tokens, passwords, VPN material, SNMP communities, and SSH credentials out of prompts and responses.

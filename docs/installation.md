@@ -53,6 +53,11 @@ UNIFI_SITE_MANAGER_API_KEY_FILE=/secure/path/unifi-site-manager-api-key
 UNIFI_SITE_MANAGER_CONSOLE_ID=<console-id>
 UNIFI_NETWORK_SITE=default
 ```
+Before setting `UNIFI_SITE_MANAGER_CONSOLE_ID`, use the read-only
+`unifi_list_site_manager_consoles` tool to discover permitted consoles. It
+supports bounded pagination and filtering for accounts with many consoles.
+Choose one returned `id` explicitly; the MCP never silently chooses among
+multiple consoles.
 
 When both are configured, cloud reads are preferred and direct reads are the
 fallback. Mutations are not automatically retried through a second route.
