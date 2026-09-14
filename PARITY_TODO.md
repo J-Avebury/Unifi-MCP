@@ -197,6 +197,7 @@ families cannot be silently mixed; destructive operations remain previewed.
   verification.
 - [ ] API-key, local-session, and controller-version capability requirements
   are documented and tested.
-- [ ] `cargo fmt --check`, strict Clippy, unit/integration tests, release build,
-  and non-mutating live smoke tests pass.
+- [x] `cargo fmt --check`, strict Clippy, unit/integration tests, release build,
+  and non-mutating live smoke tests pass for the local and Site Manager connector
+  transports; confirmed writes remain excluded from live validation.
 - [x] The Network tracker table reports 194/194 exact-name parity. Protect and Access remain explicitly out of this Network-only implementation scope.

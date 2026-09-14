@@ -26,6 +26,17 @@ impl UnifiClient {
             password: config.password,
             authenticated: Arc::new(Mutex::new(false)),
             integration_site_id: Arc::new(Mutex::new(None)),
+            site_manager: config
+                .site_manager_api_key
+                .map(|key| {
+                    crate::site_manager::SiteManagerClient::new(
+                        key,
+                        config.site_manager_site_id,
+                        config.site_manager_console_id,
+                        config.insecure_tls,
+                    )
+                })
+                .transpose()?,
             redact_sensitive_fields: config.redact_sensitive_fields,
         })
     }
@@ -96,6 +107,27 @@ impl UnifiClient {
         body: Option<Value>,
         redact_response: bool,
     ) -> Result<Value> {
+        if let Some(cloud) = self
+            .site_manager
+            .as_ref()
+            .filter(|client| client.has_console_id())
+        {
+            let mut value = cloud
+                .connector_request(
+                    method,
+                    &format!(
+                        "proxy/network/api/s/{}/{}",
+                        self.site,
+                        endpoint.trim_start_matches('/')
+                    ),
+                    body,
+                )
+                .await?;
+            if redact_response && self.redact_sensitive_fields {
+                redact_sensitive(&mut value);
+            }
+            return Ok(value);
+        }
         self.ensure_login().await?;
         let url = self.network_url(endpoint)?;
         let mut delay = 100;
@@ -197,6 +229,28 @@ impl UnifiClient {
         body: Option<Value>,
         query: &[(&str, String)],
     ) -> Result<Value> {
+        if let Some(cloud) = self
+            .site_manager
+            .as_ref()
+            .filter(|client| client.has_console_id())
+        {
+            let cloud_endpoint = append_query(endpoint, query);
+            let mut value = cloud
+                .connector_request(
+                    method,
+                    &format!(
+                        "proxy/network/v2/api/site/{}/{}",
+                        self.site,
+                        cloud_endpoint.trim_start_matches('/')
+                    ),
+                    body,
+                )
+                .await?;
+            if self.redact_sensitive_fields {
+                redact_sensitive(&mut value);
+            }
+            return Ok(value);
+        }
         self.ensure_login().await?;
         let mut url = self.network_v2_url(endpoint)?;
         for (key, value) in query {
@@ -249,6 +303,28 @@ impl UnifiClient {
         body: Option<Value>,
         query: &[(&str, String)],
     ) -> Result<Value> {
+        if let Some(cloud) = self
+            .site_manager
+            .as_ref()
+            .filter(|client| client.has_console_id())
+        {
+            let site_id = self.integration_site().await?;
+            let cloud_endpoint = append_query(endpoint, query);
+            let mut value = cloud
+                .connector_request(
+                    method,
+                    &format!(
+                        "proxy/network/integration/v1/sites/{site_id}/{}",
+                        cloud_endpoint.trim_start_matches('/')
+                    ),
+                    body,
+                )
+                .await?;
+            if self.redact_sensitive_fields {
+                redact_sensitive(&mut value);
+            }
+            return Ok(value);
+        }
         if self.api_key.is_none() {
             bail!(
                 "The UniFi Network Integration API requires UNIFI_NETWORK_API_KEY or UNIFI_API_KEY"
@@ -296,6 +372,27 @@ impl UnifiClient {
         limit: usize,
         offset: usize,
     ) -> Result<Value> {
+        if let Some(cloud) = self
+            .site_manager
+            .as_ref()
+            .filter(|client| client.has_console_id())
+        {
+            let cloud_endpoint = format!(
+                "{}?limit={limit}&offset={offset}",
+                endpoint.trim_start_matches('/')
+            );
+            let mut value = cloud
+                .connector_request(
+                    method,
+                    &format!("proxy/network/integration/{cloud_endpoint}"),
+                    None,
+                )
+                .await?;
+            if self.redact_sensitive_fields {
+                redact_sensitive(&mut value);
+            }
+            return Ok(value);
+        }
         let api_key = self.api_key.as_deref().context(
             "The UniFi Network Integration API requires UNIFI_NETWORK_API_KEY or UNIFI_API_KEY",
         )?;
@@ -331,6 +428,18 @@ impl UnifiClient {
         let mut cached = self.integration_site_id.lock().await;
         if let Some(site_id) = cached.as_ref() {
             return Ok(site_id.clone());
+        }
+        if let Some(cloud) = self
+            .site_manager
+            .as_ref()
+            .filter(|client| client.has_console_id())
+        {
+            let payload = cloud
+                .connector_request(Method::GET, "proxy/network/integration/v1/sites", None)
+                .await?;
+            let site_id = integration_site_id_from_payload(&payload, &self.site)?;
+            *cached = Some(site_id.clone());
+            return Ok(site_id);
         }
         let api_key = self
             .api_key
@@ -397,4 +506,49 @@ impl UnifiClient {
 fn is_capability_error(error: &anyhow::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
     message.contains("not supported") || message.contains("requires unifi network integration api")
+}
+
+fn append_query(endpoint: &str, query: &[(&str, String)]) -> String {
+    if query.is_empty() {
+        return endpoint.to_owned();
+    }
+    let separator = if endpoint.contains('?') { '&' } else { '?' };
+    let pairs = query
+        .iter()
+        .map(|(key, value)| {
+            format!(
+                "{}={}",
+                urlencoding::encode(key),
+                urlencoding::encode(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{endpoint}{separator}{pairs}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_query;
+
+    #[test]
+    fn connector_query_encodes_filter_and_preserves_existing_query() {
+        let endpoint = append_query(
+            "dns/policies?scope=site",
+            &[
+                ("offset", "10".to_owned()),
+                ("limit", "50".to_owned()),
+                ("filter", "guest network/5G".to_owned()),
+            ],
+        );
+        assert_eq!(
+            endpoint,
+            "dns/policies?scope=site&offset=10&limit=50&filter=guest%20network%2F5G"
+        );
+    }
+
+    #[test]
+    fn connector_query_without_parameters_does_not_add_question_mark() {
+        assert_eq!(append_query("dns/policies", &[]), "dns/policies");
+    }
 }

@@ -1,4 +1,7 @@
 use anyhow::{Context, Result, bail};
+use http_body_util::{BodyExt, Full};
+use hyper::{Request, Response, body::Incoming, server::conn::http1, service::service_fn};
+use hyper_util::rt::TokioIo;
 use reqwest::{Client, Method, StatusCode, Url};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
@@ -7,19 +10,28 @@ use rmcp::{
         PaginatedRequestParams, ResultType, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
     },
     service::RequestContext,
-    transport::stdio,
+    transport::{
+        stdio,
+        streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
+    },
 };
 use serde_json::{Map, Value, json};
 use std::{
     borrow::Cow,
+    convert::Infallible,
     env, fs,
+    net::SocketAddr,
     sync::{Arc, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
+use tower_service::Service;
 
 mod client;
 mod legacy;
+mod site_manager;
 mod tools;
 
 const DEFAULT_SITE: &str = "default";
@@ -269,6 +281,7 @@ struct UnifiClient {
     password: Option<String>,
     authenticated: Arc<Mutex<bool>>,
     integration_site_id: Arc<Mutex<Option<String>>>,
+    site_manager: Option<site_manager::SiteManagerClient>,
     redact_sensitive_fields: bool,
 }
 
@@ -280,6 +293,9 @@ struct UnifiConfig {
     password: Option<String>,
     insecure_tls: bool,
     redact_sensitive_fields: bool,
+    site_manager_api_key: Option<String>,
+    site_manager_site_id: Option<String>,
+    site_manager_console_id: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -2052,6 +2068,19 @@ impl UnifiMcp {
             .with_context(|| format!("No resource matched {id_arg} '{identifier}'"))
     }
 
+    async fn site_manager_dashboard(&self, local_error: &anyhow::Error) -> Result<Value> {
+        let client = self
+            .unifi
+            .site_manager
+            .as_ref()
+            .context("{local_error}; configure UNIFI_SITE_MANAGER_API_KEY_FILE for the cloud dashboard fallback")?;
+        let site_id = client.resolve_site_id(&self.unifi.site).await?;
+        let metrics = client.isp_metrics("5m", "24h").await?;
+        Ok(
+            json!({"source":"site_manager","site_id":site_id,"history_seconds":86400,"isp_metrics":metrics,"local_controller_error":local_error.to_string()}),
+        )
+    }
+
     async fn special_read(
         &self,
         operation: SpecialReadOperation,
@@ -2066,13 +2095,28 @@ impl UnifiMcp {
                     .get("history_seconds")
                     .and_then(Value::as_u64)
                     .unwrap_or(86400);
-                self.unifi
+                if self.unifi.site_manager.is_some()
+                    && self.unifi.api_key.is_none()
+                    && self.unifi.username.is_none()
+                {
+                    return self
+                        .site_manager_dashboard(&anyhow::anyhow!(
+                            "local controller transport is not configured"
+                        ))
+                        .await;
+                }
+                match self
+                    .unifi
                     .integration_or_v2_request(
                         Method::GET,
                         &format!("aggregated-dashboard?historySeconds={history}"),
                         None,
                     )
                     .await
+                {
+                    Ok(value) => Ok(value),
+                    Err(local_error) => self.site_manager_dashboard(&local_error).await,
+                }
             }
             SpecialReadOperation::RecentEvents => Ok(
                 json!({"events":[],"count":0,"listening":false,"attached":false,"buffer_size":0,"buffer_capacity":0,"hint":"The Rust/stdin server does not run the upstream websocket listener; use unifi_list_events for historical events."}),
@@ -2589,14 +2633,27 @@ impl ServerHandler for UnifiMcp {
 
 impl UnifiConfig {
     fn from_env() -> Result<Self> {
-        let base_url = resolve_base_url()?;
+        let site_manager_api_key =
+            optional_secret_env_pair("UNIFI_SITE_MANAGER_API_KEY", "UNIFI_CLOUD_API_KEY")?;
+        let base_url = match resolve_base_url() {
+            Ok(url) => url,
+            Err(_error) if site_manager_api_key.is_some() => {
+                Url::parse("https://127.0.0.1").context("invalid cloud-only fallback URL")?
+            }
+            Err(error) => return Err(error),
+        };
         let site =
             env_pair("UNIFI_NETWORK_SITE", "UNIFI_SITE").unwrap_or_else(|| DEFAULT_SITE.into());
         let api_key = optional_secret_env_pair("UNIFI_NETWORK_API_KEY", "UNIFI_API_KEY")?;
         let username = env_pair("UNIFI_NETWORK_USERNAME", "UNIFI_USERNAME");
         let password = optional_secret_env_pair("UNIFI_NETWORK_PASSWORD", "UNIFI_PASSWORD")?;
-        if api_key.is_none() && (username.is_none() || password.is_none()) {
-            bail!("configure an API key or both a local username and password");
+        if api_key.is_none()
+            && (username.is_none() || password.is_none())
+            && site_manager_api_key.is_none()
+        {
+            bail!(
+                "configure a local API key, local username/password, or UNIFI_SITE_MANAGER_API_KEY_FILE"
+            );
         }
         if username.is_some() != password.is_some() {
             bail!("local authentication requires both username and password");
@@ -2612,6 +2669,11 @@ impl UnifiConfig {
             "UNIFI_REDACT_SENSITIVE_FIELDS",
             true,
         )?;
+        let site_manager_api_key =
+            optional_secret_env_pair("UNIFI_SITE_MANAGER_API_KEY", "UNIFI_CLOUD_API_KEY")?;
+        let site_manager_site_id = env_pair("UNIFI_SITE_MANAGER_SITE_ID", "UNIFI_CLOUD_SITE_ID");
+        let site_manager_console_id =
+            env_pair("UNIFI_SITE_MANAGER_CONSOLE_ID", "UNIFI_CLOUD_CONSOLE_ID");
         Ok(Self {
             base_url,
             site,
@@ -2620,6 +2682,9 @@ impl UnifiConfig {
             password,
             insecure_tls,
             redact_sensitive_fields,
+            site_manager_api_key,
+            site_manager_site_id,
+            site_manager_console_id,
         })
     }
 }
@@ -3359,9 +3424,85 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let server = UnifiMcp::new(UnifiClient::new(UnifiConfig::from_env()?)?);
-    let service = server.serve(stdio()).await?;
-    service.waiting().await?;
-    Ok(())
+    if matches!(
+        env_pair("UNIFI_MCP_TRANSPORT", "UNIFI_NETWORK_MCP_TRANSPORT").as_deref(),
+        Some("http" | "streamable-http")
+    ) {
+        serve_http(server).await
+    } else {
+        let service = server.serve(stdio()).await?;
+        service.waiting().await?;
+        Ok(())
+    }
+}
+
+async fn serve_http(server: UnifiMcp) -> Result<()> {
+    let token =
+        optional_secret_env_pair("UNIFI_MCP_HTTP_TOKEN", "UNIFI_NETWORK_MCP_HTTP_TOKEN")?
+            .context("HTTP transport requires UNIFI_MCP_HTTP_TOKEN_FILE or UNIFI_MCP_HTTP_TOKEN")?;
+    let bind = env_pair("UNIFI_MCP_HTTP_BIND", "UNIFI_NETWORK_MCP_HTTP_BIND")
+        .unwrap_or_else(|| "127.0.0.1:8000".into());
+    let address: SocketAddr = bind
+        .parse()
+        .with_context(|| format!("invalid HTTP bind address: {bind}"))?;
+    let allowed_host = env_pair(
+        "UNIFI_MCP_HTTP_ALLOWED_HOST",
+        "UNIFI_NETWORK_MCP_HTTP_ALLOWED_HOST",
+    )
+    .unwrap_or_else(|| address.to_string());
+    let config = StreamableHttpServerConfig::default()
+        .with_allowed_hosts([allowed_host])
+        .with_json_response(true);
+    let service = StreamableHttpService::new(
+        move || Ok(server.clone()),
+        Arc::new(LocalSessionManager::default()),
+        config,
+    );
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .with_context(|| format!("failed to bind MCP HTTP transport on {address}"))?;
+    tracing::info!("MCP Streamable HTTP listening on {address}");
+
+    loop {
+        let (stream, _) = listener.accept().await.context("MCP HTTP accept failed")?;
+        let service = service.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            let io = TokioIo::new(stream);
+            let http_service = service_fn(move |request: Request<Incoming>| {
+                let mut service = service.clone();
+                let token = token.clone();
+                async move {
+                    let authorised = request
+                        .headers()
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.strip_prefix("Bearer "))
+                        .is_some_and(|value| value == token);
+                    if !authorised {
+                        let body = Full::new(hyper::body::Bytes::from_static(b"unauthorized"))
+                            .map_err(|never: Infallible| match never {})
+                            .boxed();
+                        return Ok::<_, Infallible>(
+                            Response::builder()
+                                .status(StatusCode::UNAUTHORIZED)
+                                .header("www-authenticate", "Bearer")
+                                .body(body)
+                                .expect("valid unauthorized response"),
+                        );
+                    }
+                    service.call(request).await
+                }
+            });
+            if let Err(error) = http1::Builder::new()
+                .serve_connection(io, http_service)
+                .with_upgrades()
+                .await
+            {
+                tracing::debug!("MCP HTTP connection closed: {error}");
+            }
+        });
+    }
 }
 
 #[cfg(test)]

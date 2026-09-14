@@ -2,13 +2,12 @@
 
 Local, on-demand Rust MCP server for UniFi Network.
 
-This is a Rust stdio MCP. It does not listen on a TCP port. An MCP client starts
-the binary as a child process and talks to it over stdin/stdout.
+This is a Rust MCP with stdio by default and authenticated Streamable HTTP for remote clients. Stdio runs the binary as a child process; HTTP mode lets a client connect from anywhere through a secured deployment.
 
 ## Compatibility target
 
 The tool names and response contract target the official local UniFi Network
-API, implemented natively in Rust. The current release exposes 249 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors. Against the configured 10.6.101 controller, the latest non-mutating read smoke test covered 59 read tools: 55 succeeded and 4 returned explicit capability errors (batch status, dashboard aggregate, IPS events, traffic-flow summary, and OON inventory).
+API, implemented natively in Rust. The current release exposes 249 Network tools: the official Integration API surface, legacy diagnostics, and all 194 exact upstream Network compatibility names. Compatibility routes remain controller-dependent and report explicit unsupported-route errors. Against the configured 10.6.101 controller, the latest non-mutating read smoke test covered 59 read tools: 55 succeeded and 4 returned explicit capability errors (batch status, dashboard aggregate, IPS events, and traffic-flow summary).
 
 The checked-in upstream Network manifest supplies exact compatibility schemas and annotations for the 194-name surface. Identified compatibility PUT updates fetch, merge, write, and verify the requested fields; command-style routes disclose when stable read-back is unavailable.
 
@@ -90,10 +89,16 @@ Server-specific variables take priority over shared `UNIFI_*` fallbacks.
 | `UNIFI_NETWORK_VERIFY_SSL` | `UNIFI_VERIFY_SSL` | No | | Set to `false` for a local self-signed controller certificate. |
 | `UNIFI_NETWORK_INSECURE_TLS` | `UNIFI_INSECURE_TLS` | No | `false` | Alternative TLS flag when `*_VERIFY_SSL` is not set. |
 | `UNIFI_NETWORK_REDACT_SENSITIVE_FIELDS` | `UNIFI_REDACT_SENSITIVE_FIELDS` | No | `true` | Redacts known secret fields before MCP responses. |
+| `UNIFI_SITE_MANAGER_API_KEY_FILE` | `UNIFI_CLOUD_API_KEY_FILE` | Conditional | | Site Manager API key file for the api.ui.com console connector. |
+| `UNIFI_SITE_MANAGER_CONSOLE_ID` | `UNIFI_CLOUD_CONSOLE_ID` | Conditional | | Console ID used by the api.ui.com connector. |
+| `UNIFI_SITE_MANAGER_SITE_ID` | `UNIFI_CLOUD_SITE_ID` | No | | Optional Site Manager site ID for cloud dashboard metrics. |
+| `UNIFI_MCP_TRANSPORT` | `UNIFI_NETWORK_MCP_TRANSPORT` | No | `stdio` | Set to `http` for authenticated Streamable HTTP. |
+| `UNIFI_MCP_HTTP_TOKEN_FILE` | `UNIFI_NETWORK_MCP_HTTP_TOKEN_FILE` | Conditional for HTTP | | Bearer token file required by HTTP mode. |
+| `UNIFI_MCP_HTTP_BIND` | `UNIFI_NETWORK_MCP_HTTP_BIND` | No | `127.0.0.1:8000` | HTTP listen address. |
+| `UNIFI_MCP_HTTP_ALLOWED_HOST` | `UNIFI_NETWORK_MCP_HTTP_ALLOWED_HOST` | No | bind address | Host header accepted by the Streamable HTTP server. |
 | `RUST_LOG` | | No | | Rust tracing filter, for example `info`. |
 
-The server requires a controller URL/host and accepts either an API key or a
-local username/password pair. An API key takes precedence when both are
+The server accepts local controller credentials, Site Manager cloud credentials, or both. Cloud connector mode requires a console ID and can operate without a local controller URL. HTTP mode requires a bearer token and should normally be placed behind TLS or a private network. An API key takes precedence when both are
 configured. The server does not load `.env`
 files automatically. Put env values in the MCP client config, export them in the
 launcher, or point a supported secret variable at a trusted `*_FILE`.
@@ -101,6 +106,32 @@ launcher, or point a supported secret variable at a trusted `*_FILE`.
 Known secret-bearing fields are redacted by default, including Wi-Fi
 passphrases, passwords, API keys, tokens, VPN key material, SNMP community
 strings, and device SSH credentials.
+
+## Remote deployment
+
+For remote MCP clients, run authenticated Streamable HTTP behind a TLS reverse
+proxy or private tunnel. The Site Manager connector forwards Network requests
+through `api.ui.com`; the connector supports the upstream HTTP methods used by
+the tools, including GET, POST, PUT, PATCH, and DELETE. The API key and bearer
+token are read from files in this example and remain outside the repository:
+
+```sh
+UNIFI_SITE_MANAGER_API_KEY_FILE=/run/secrets/unifi-site-manager-api-key \
+UNIFI_SITE_MANAGER_CONSOLE_ID=<console-id> \
+UNIFI_NETWORK_SITE=default \
+UNIFI_MCP_TRANSPORT=http \
+UNIFI_MCP_HTTP_TOKEN_FILE=/run/secrets/unifi-mcp-http-token \
+UNIFI_MCP_HTTP_BIND=127.0.0.1:8000 \
+UNIFI_MCP_HTTP_ALLOWED_HOST=mcp.example.com \
+./target/release/unifi-mcp
+```
+
+The connector path for a site-scoped Integration request is, for example,
+`/v1/connector/consoles/{consoleId}/proxy/network/integration/v1/sites/{siteId}/dns/policies`.
+The console ID must be one the Site Manager key is permitted to access. The
+connector itself enforces its request timeout and response-size limits; this
+client also bounds its connector responses and reports unsupported routes
+explicitly.
 
 ## Build
 
